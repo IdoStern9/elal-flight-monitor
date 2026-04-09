@@ -98,6 +98,8 @@ class Scraper:
     def __init__(self):
         self._playwright = None
         self._browser: Optional[Browser] = None
+        self._page: Optional[Page] = None
+        self._page_ready = False
 
     async def start(self):
         self._playwright = await async_playwright().start()
@@ -105,6 +107,11 @@ class Scraper:
         logger.info("Browser launched")
 
     async def stop(self):
+        if self._page:
+            try:
+                await self._page.close()
+            except Exception:
+                pass
         if self._browser:
             await self._browser.close()
         if self._playwright:
@@ -113,6 +120,8 @@ class Scraper:
 
     async def _restart_browser(self):
         logger.warning("Restarting browser...")
+        self._page = None
+        self._page_ready = False
         try:
             if self._browser:
                 await self._browser.close()
@@ -120,60 +129,65 @@ class Scraper:
             pass
         self._browser = await self._playwright.chromium.launch(headless=True)
 
-    async def scrape(self) -> ScrapeResult:
+    async def _ensure_page(self) -> Page:
         if not self._browser or not self._browser.is_connected():
             await self._restart_browser()
+        if self._page is None or self._page.is_closed():
+            self._page = await self._browser.new_page()
+            self._page_ready = False
+        return self._page
 
-        page = await self._browser.new_page()
+    async def scrape(self) -> ScrapeResult:
+        page = await self._ensure_page()
         try:
             return await self._do_scrape(page)
-        finally:
+        except Exception:
+            self._page = None
+            self._page_ready = False
+            raise
+
+    async def _do_scrape(self, page: Page) -> ScrapeResult:
+        if self._page_ready:
+            logger.info("Reloading seat availability page...")
+            await page.reload(wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(2000)
+        else:
+            logger.info("Navigating to El Al seat availability page...")
+            await page.goto(URL, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(3000)
+
             try:
-                await page.close()
+                btn = page.locator('button:has-text("I understand")')
+                if await btn.count() > 0:
+                    await btn.first.click()
+                    await page.wait_for_timeout(500)
             except Exception:
                 pass
 
-    async def _do_scrape(self, page: Page) -> ScrapeResult:
-        logger.info("Navigating to El Al seat availability page...")
-        await page.goto(URL, wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_timeout(5000)
-
-        try:
-            btn = page.locator('button:has-text("I understand")')
-            if await btn.count() > 0:
-                await btn.first.click()
-                await page.wait_for_timeout(500)
-        except Exception:
-            pass
-
         await page.wait_for_selector(".seat-availability-page", state="attached", timeout=25000)
         await page.wait_for_selector(".header-date", state="attached", timeout=20000)
-        await page.wait_for_timeout(2000)
+        await page.wait_for_timeout(1000)
 
-        # Scroll to load all destinations (page uses lazy rendering)
-        # Do two full passes to ensure everything loads
-        for pass_num in range(2):
-            prev_count = 0
-            stable_rounds = 0
-            for _ in range(40):
-                await page.evaluate("window.scrollBy(0, 2000)")
-                await page.wait_for_timeout(500)
-                count = await page.evaluate("document.querySelectorAll('app-seat-availability-item').length")
-                if count == prev_count:
-                    stable_rounds += 1
-                    if stable_rounds >= 4:
-                        break
-                else:
-                    stable_rounds = 0
-                    prev_count = count
-            if pass_num == 0:
-                await page.evaluate("window.scrollTo(0, 0)")
-                await page.wait_for_timeout(1000)
+        prev_count = 0
+        stable_rounds = 0
+        for _ in range(40):
+            await page.evaluate("window.scrollBy(0, 3000)")
+            await page.wait_for_timeout(300)
+            count = await page.evaluate("document.querySelectorAll('app-seat-availability-item').length")
+            if count == prev_count:
+                stable_rounds += 1
+                if stable_rounds >= 3:
+                    break
+            else:
+                stable_rounds = 0
+                prev_count = count
 
         logger.info("Scrolled page, loaded %d flight items", prev_count)
 
         await page.evaluate("window.scrollTo(0, 0)")
-        await page.wait_for_timeout(500)
+        await page.wait_for_timeout(300)
+
+        self._page_ready = True
 
         result = await page.evaluate(PARSE_JS)
 

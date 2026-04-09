@@ -507,6 +507,21 @@ a.seat-pill.available:hover { background: var(--green-glow); border-color: var(-
 }
 .ntfy-btn-delete:hover { filter: brightness(1.2); }
 
+.ntfy-trigger-list {
+  display: flex; flex-direction: column; gap: 2px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface2); overflow: hidden;
+}
+.ntfy-trigger-item {
+  display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto;
+  gap: 0 0.45rem; padding: 0.45rem 0.6rem; cursor: pointer;
+  transition: background 0.1s; align-items: center;
+}
+.ntfy-trigger-item:hover { background: var(--accent-dim); }
+.ntfy-trigger-item input[type="checkbox"] { grid-row: 1 / 3; accent-color: var(--accent); }
+.ntfy-trigger-item .trigger-label { font-size: 0.78rem; font-weight: 600; }
+.ntfy-trigger-item .trigger-desc { font-size: 0.68rem; color: var(--text-faint); }
+
 .ntfy-empty { text-align: center; padding: 2rem 1rem; color: var(--text-faint); font-size: 0.82rem; }
 
 /* ── Date bar ── */
@@ -670,6 +685,37 @@ a.seat-pill.available:hover { background: var(--green-glow); border-color: var(-
     <div class="ntfy-field" id="ntfyDestField" style="display:none">
       <label>Select Destinations</label>
       <div class="ntfy-dest-list" id="ntfyDestList"></div>
+    </div>
+
+    <div class="ntfy-field">
+      <label>Alert Triggers</label>
+      <div class="ntfy-trigger-list">
+        <label class="ntfy-trigger-item">
+          <input type="checkbox" value="new_flight" checked onchange="toggleNtfyTrigger('new_flight', this.checked)">
+          <span class="trigger-label">New flight</span>
+          <span class="trigger-desc">A new flight appears with available seats</span>
+        </label>
+        <label class="ntfy-trigger-item">
+          <input type="checkbox" value="seats_available" checked onchange="toggleNtfyTrigger('seats_available', this.checked)">
+          <span class="trigger-label">Seats became available</span>
+          <span class="trigger-desc">Seats cross above min seats threshold</span>
+        </label>
+        <label class="ntfy-trigger-item">
+          <input type="checkbox" value="seats_changed" onchange="toggleNtfyTrigger('seats_changed', this.checked)">
+          <span class="trigger-label">Any seat change</span>
+          <span class="trigger-desc">Seat count changed (not covered above)</span>
+        </label>
+        <label class="ntfy-trigger-item">
+          <input type="checkbox" value="seats_decreased" onchange="toggleNtfyTrigger('seats_decreased', this.checked)">
+          <span class="trigger-label">Seats decreasing</span>
+          <span class="trigger-desc">Seats went down - book fast!</span>
+        </label>
+        <label class="ntfy-trigger-item">
+          <input type="checkbox" value="flight_removed" onchange="toggleNtfyTrigger('flight_removed', this.checked)">
+          <span class="trigger-label">Flight removed</span>
+          <span class="trigger-desc">Flight disappeared from the site</span>
+        </label>
+      </div>
     </div>
 
     <div class="ntfy-actions">
@@ -1227,6 +1273,7 @@ let ntfyConfigs = [];
 let ntfyEditId = null;
 let ntfyMode = 'all';
 let ntfySelectedDests = new Set();
+let ntfyTriggers = new Set(['new_flight', 'seats_available']);
 
 function toggleNtfyDrawer() {
   const drawer = document.getElementById('ntfyDrawer');
@@ -1264,8 +1311,9 @@ function renderNtfyList() {
     return;
   }
   container.innerHTML = ntfyConfigs.map(cfg => {
-    const destInfo = cfg.mode === 'all' ? 'All destinations' : `${cfg.destinations.length} destination${cfg.destinations.length !== 1 ? 's' : ''}`;
-    const detail = cfg.topic ? `${cfg.topic} · ${destInfo} · ≥${cfg.min_seats} seats` : 'Not configured';
+    const destInfo = cfg.mode === 'all' ? 'All dest.' : `${cfg.destinations.length} dest.`;
+    const trigCount = (cfg.triggers || []).length;
+    const detail = cfg.topic ? `${cfg.topic} | ${destInfo} | ${trigCount} trigger${trigCount !== 1 ? 's' : ''} | min ${cfg.min_seats}` : 'Not configured';
     return `<div class="ntfy-config-item" onclick="ntfyEdit(${cfg.id})">
       <div class="nci-status ${cfg.enabled ? 'on' : 'off'}"></div>
       <div class="nci-info">
@@ -1286,8 +1334,10 @@ function ntfyEditNew() {
   document.getElementById('ntfyMinSeats').value = '1';
   ntfyMode = 'all';
   ntfySelectedDests = new Set();
+  ntfyTriggers = new Set(['new_flight', 'seats_available']);
   updateNtfyModeUI();
   renderNtfyDests();
+  applyTriggersToUI();
   document.getElementById('ntfyDeleteBtn').style.display = 'none';
   document.getElementById('ntfyStatus').textContent = '';
   ntfyShowEdit();
@@ -1304,8 +1354,10 @@ function ntfyEdit(id) {
   document.getElementById('ntfyMinSeats').value = cfg.min_seats;
   ntfyMode = cfg.mode || 'all';
   ntfySelectedDests = new Set(cfg.destinations || []);
+  ntfyTriggers = new Set(cfg.triggers || ['new_flight', 'seats_available']);
   updateNtfyModeUI();
   renderNtfyDests();
+  applyTriggersToUI();
   document.getElementById('ntfyDeleteBtn').style.display = '';
   document.getElementById('ntfyStatus').textContent = '';
   ntfyShowEdit();
@@ -1350,6 +1402,17 @@ function toggleNtfyDest(code, checked) {
   else ntfySelectedDests.delete(code);
 }
 
+function toggleNtfyTrigger(type, checked) {
+  if (checked) ntfyTriggers.add(type);
+  else ntfyTriggers.delete(type);
+}
+
+function applyTriggersToUI() {
+  document.querySelectorAll('.ntfy-trigger-item input[type="checkbox"]').forEach(cb => {
+    cb.checked = ntfyTriggers.has(cb.value);
+  });
+}
+
 function updateNtfyBtn() {
   const btn = document.getElementById('ntfyBtn');
   const anyEnabled = ntfyConfigs.some(c => c.enabled);
@@ -1367,6 +1430,7 @@ function _getEditFormData() {
     mode: ntfyMode,
     min_seats: parseInt(document.getElementById('ntfyMinSeats').value) || 1,
     destinations: [...ntfySelectedDests],
+    triggers: [...ntfyTriggers],
   };
 }
 

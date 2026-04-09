@@ -185,6 +185,10 @@ def get_changes_json(limit: int = 100) -> list:
 # ── ntfy configurations (multiple rules) ──
 
 
+ALL_TRIGGER_TYPES = ["new_flight", "seats_available", "seats_changed", "seats_decreased", "flight_removed"]
+DEFAULT_TRIGGERS = ["new_flight", "seats_available"]
+
+
 def _ensure_ntfy_table():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""
@@ -196,9 +200,14 @@ def _ensure_ntfy_table():
             topic TEXT NOT NULL DEFAULT '',
             mode TEXT NOT NULL DEFAULT 'all',
             min_seats INTEGER NOT NULL DEFAULT 1,
-            destinations TEXT NOT NULL DEFAULT '[]'
+            destinations TEXT NOT NULL DEFAULT '[]',
+            triggers TEXT NOT NULL DEFAULT '["new_flight","seats_available"]'
         )
     """)
+    try:
+        conn.execute("ALTER TABLE ntfy_configs ADD COLUMN triggers TEXT NOT NULL DEFAULT '[\"new_flight\",\"seats_available\"]'")
+    except sqlite3.OperationalError:
+        pass
     # Migrate from old single-row table if it exists
     try:
         row = conn.execute("SELECT enabled, server_url, topic, mode, min_seats, destinations FROM ntfy_config WHERE id=1").fetchone()
@@ -224,10 +233,11 @@ def _row_to_dict(row) -> dict:
         "mode": row[5],
         "min_seats": row[6],
         "destinations": json.loads(row[7]),
+        "triggers": json.loads(row[8]) if row[8] else list(DEFAULT_TRIGGERS),
     }
 
 
-_NTFY_COLS = "id, name, enabled, server_url, topic, mode, min_seats, destinations"
+_NTFY_COLS = "id, name, enabled, server_url, topic, mode, min_seats, destinations, triggers"
 
 
 def get_all_ntfy_configs() -> list:
@@ -258,16 +268,17 @@ def save_ntfy_config(cfg: dict) -> dict:
         cfg.get("mode", "all"),
         int(cfg.get("min_seats", 1)),
         json.dumps(cfg.get("destinations", [])),
+        json.dumps(cfg.get("triggers", list(DEFAULT_TRIGGERS))),
     )
     config_id = cfg.get("id")
     if config_id:
         conn.execute(
-            "UPDATE ntfy_configs SET name=?, enabled=?, server_url=?, topic=?, mode=?, min_seats=?, destinations=? WHERE id=?",
+            "UPDATE ntfy_configs SET name=?, enabled=?, server_url=?, topic=?, mode=?, min_seats=?, destinations=?, triggers=? WHERE id=?",
             params + (config_id,),
         )
     else:
         cur = conn.execute(
-            "INSERT INTO ntfy_configs (name, enabled, server_url, topic, mode, min_seats, destinations) VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO ntfy_configs (name, enabled, server_url, topic, mode, min_seats, destinations, triggers) VALUES (?,?,?,?,?,?,?,?)",
             params,
         )
         config_id = cur.lastrowid

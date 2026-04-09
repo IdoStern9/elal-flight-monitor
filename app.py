@@ -31,6 +31,7 @@ class NtfyConfigBody(BaseModel):
     mode: str = "all"
     min_seats: int = 1
     destinations: List[str] = []
+    triggers: List[str] = ["new_flight", "seats_available"]
 
 
 logging.basicConfig(
@@ -63,57 +64,110 @@ def _dest_name_ascii(dest: str) -> str:
     return dest.replace(f"({_extract_iata(dest)})", "").replace(",", ",").strip()
 
 
+def _match_trigger(cfg: dict, c: Change) -> Optional[str]:
+    """Check if a change matches the config's trigger rules. Returns a label or None."""
+    triggers = set(cfg.get("triggers", ["new_flight", "seats_available"]))
+    min_s = cfg["min_seats"]
+
+    if c.change_type == "new_flight":
+        if "new_flight" in triggers and c.new_seats is not None and c.new_seats >= min_s:
+            return "new_flight"
+
+    elif c.change_type == "seats_changed":
+        went_above = (c.new_seats is not None and c.new_seats >= min_s
+                      and (c.old_seats is None or c.old_seats < min_s))
+        went_down = (c.old_seats is not None and c.new_seats is not None
+                     and c.new_seats < c.old_seats)
+
+        if "seats_available" in triggers and went_above:
+            return "seats_available"
+        if "seats_decreased" in triggers and went_down:
+            return "seats_decreased"
+        if "seats_changed" in triggers and not went_above and not went_down:
+            return "seats_changed"
+
+    elif c.change_type == "flight_removed":
+        if "flight_removed" in triggers:
+            return "flight_removed"
+
+    return None
+
+
+_TRIGGER_TITLES = {
+    "new_flight":      lambda iata, s, _o: f"New flight: TLV -> {iata} ({s} seats)",
+    "seats_available": lambda iata, s, o:  f"Seats available: TLV -> {iata} ({o} -> {s})",
+    "seats_changed":   lambda iata, s, o:  f"Seats update: TLV -> {iata} ({o} -> {s})",
+    "seats_decreased": lambda iata, s, o:  f"Seats dropping: TLV -> {iata} ({o} -> {s})",
+    "flight_removed":  lambda iata, _s, _o: f"Flight removed: TLV -> {iata}",
+}
+
+_TRIGGER_PRIORITY = {
+    "new_flight": "high",
+    "seats_available": "high",
+    "seats_decreased": "urgent",
+    "seats_changed": "default",
+    "flight_removed": "low",
+}
+
+_TRIGGER_TAGS = {
+    "new_flight": "airplane,new",
+    "seats_available": "airplane,white_check_mark",
+    "seats_decreased": "airplane,warning",
+    "seats_changed": "airplane",
+    "flight_removed": "airplane,x",
+}
+
+
 async def _send_for_config(cfg: dict, changes: List[Change]):
     """Send one ntfy push per matching change."""
     global _http_client
     url = f"{cfg['server_url'].rstrip('/')}/{cfg['topic']}"
 
     for c in changes:
-        if c.change_type not in ("new_flight", "seats_changed"):
-            continue
-        if c.new_seats is None or c.new_seats < cfg["min_seats"]:
-            continue
-        if c.change_type == "seats_changed" and c.old_seats is not None and c.old_seats >= cfg["min_seats"]:
-            continue
         iata = _extract_iata(c.destination)
         if cfg["mode"] == "selected" and iata not in cfg["destinations"]:
             continue
 
-        seats = "9+" if c.new_seats >= 9 else str(c.new_seats)
+        trigger = _match_trigger(cfg, c)
+        if not trigger:
+            continue
+
+        new_s = "9+" if (c.new_seats or 0) >= 9 else str(c.new_seats or 0)
+        old_s = str(c.old_seats) if c.old_seats is not None else "0"
         dest_name = _dest_name_ascii(c.destination)
 
-        if c.change_type == "new_flight":
-            title = f"New flight: TLV -> {iata} ({seats} seats)"
-        else:
-            old = str(c.old_seats) if c.old_seats is not None else "0"
-            title = f"Seats available: TLV -> {iata} ({old} -> {seats})"
+        title = _TRIGGER_TITLES[trigger](iata, new_s, old_s)
 
         body_lines = [
             f"Flight: {c.flight_number}",
             f"Route: TLV -> {iata} {dest_name}",
             f"Date: {c.date}",
             f"Time: {c.time}",
-            f"Seats: {seats}",
         ]
-        if c.change_type == "seats_changed":
-            body_lines.append(f"Was: {old}")
-
-        dd, mm = c.date.split(".")
-        book_url = f"https://www.elal.com/heb/book-a-flight?from=TLV&dest={iata}&dtfrom=2026-{mm}-{dd}&journey=one_way"
+        if trigger == "flight_removed":
+            if c.old_seats is not None:
+                body_lines.append(f"Had: {old_s} seats")
+        elif trigger in ("seats_available", "seats_changed", "seats_decreased"):
+            body_lines.append(f"Seats: {old_s} -> {new_s}")
+        else:
+            body_lines.append(f"Seats: {new_s}")
 
         headers = {
             "Title": title,
-            "Priority": "high",
-            "Tags": "airplane",
+            "Priority": _TRIGGER_PRIORITY.get(trigger, "default"),
+            "Tags": _TRIGGER_TAGS.get(trigger, "airplane"),
         }
-        if iata:
+
+        if trigger != "flight_removed" and iata:
+            dd, mm = c.date.split(".")
+            book_url = f"https://www.elal.com/heb/book-a-flight?from=TLV&dest={iata}&dtfrom=2026-{mm}-{dd}&journey=one_way"
             headers["Click"] = book_url
 
         try:
             if _http_client is None:
                 _http_client = httpx.AsyncClient(timeout=10)
             resp = await _http_client.post(url, content="\n".join(body_lines), headers=headers)
-            logger.info("ntfy [%s] %s %s %s -> [%d]", cfg["name"], c.flight_number, iata, c.date, resp.status_code)
+            logger.info("ntfy [%s] %s %s %s %s -> [%d]", cfg["name"], trigger, c.flight_number, iata, c.date, resp.status_code)
         except Exception:
             logger.exception("ntfy [%s] send failed for %s", cfg["name"], c.flight_number)
 
@@ -195,7 +249,7 @@ async def lifespan(app: FastAPI):
     init_db()
     await scraper.start()
     _http_client = httpx.AsyncClient(timeout=10)
-    scheduler.add_job(run_scrape, "interval", seconds=10, id="scraper", next_run_time=datetime.now())
+    scheduler.add_job(run_scrape, "interval", seconds=5, id="scraper", next_run_time=datetime.now())
     scheduler.start()
     logger.info("Flight alert system started -- dashboard at http://localhost:8080")
     yield
