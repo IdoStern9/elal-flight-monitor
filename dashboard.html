@@ -706,7 +706,7 @@ a.seat-pill.available:hover { background: var(--green-glow); border-color: var(-
     </div>
 
     <div class="ntfy-field">
-      <label>Destinations</label>
+      <label id="ntfyDestModeLabel">Destinations</label>
       <div class="ntfy-radio-group">
         <div class="ntfy-radio active" id="ntfyModeAll" onclick="setNtfyMode('all')">All</div>
         <div class="ntfy-radio" id="ntfyModeSelected" onclick="setNtfyMode('selected')">Selected</div>
@@ -714,7 +714,8 @@ a.seat-pill.available:hover { background: var(--green-glow); border-color: var(-
     </div>
 
     <div class="ntfy-field" id="ntfyDestField" style="display:none">
-      <label>Select Destinations</label>
+      <label id="ntfyDestSelectLabel">Select Destinations</label>
+      <input class="sidebar-search" id="ntfyDestSearch" type="text" placeholder="Search…" oninput="renderNtfyDests()" style="width:100%;margin:0 0 0.3rem">
       <div class="ntfy-dest-list" id="ntfyDestList"></div>
     </div>
 
@@ -1197,37 +1198,75 @@ function renderChanges(data) {
   }).join('');
 }
 
-// ── Alert ──
+// ── Alert (config-based matching) ──
+function _matchTrigger(cfg, c) {
+  const triggers = new Set(cfg.triggers || ['new_flight', 'seats_available']);
+  const minS = cfg.min_seats || 1;
+
+  if (c.change_type === 'new_flight') {
+    if (triggers.has('new_flight') && c.new_seats != null && c.new_seats >= minS) return 'new_flight';
+  } else if (c.change_type === 'seats_changed') {
+    const wentAbove = c.new_seats != null && c.new_seats >= minS && (c.old_seats == null || c.old_seats < minS);
+    const wentDown = c.old_seats != null && c.new_seats != null && c.new_seats < c.old_seats;
+    if (triggers.has('seats_available') && wentAbove) return 'seats_available';
+    if (triggers.has('seats_decreased') && wentDown) return 'seats_decreased';
+    if (triggers.has('seats_changed') && !wentAbove && !wentDown) return 'seats_changed';
+  } else if (c.change_type === 'flight_removed') {
+    if (triggers.has('flight_removed')) return 'flight_removed';
+  }
+  return null;
+}
+
+function matchesAnyConfig(c) {
+  for (const cfg of ntfyConfigs) {
+    if (!cfg.enabled) continue;
+    const cDir = c.direction || 'outbound';
+    if (cfg.direction !== 'both' && cfg.direction !== cDir) continue;
+    if (cfg.mode === 'selected') {
+      const code = extractCode(c.destination || '');
+      if (!cfg.destinations.includes(code)) continue;
+    }
+    if (_matchTrigger(cfg, c)) return true;
+  }
+  return false;
+}
+
+const _ALERT_LABELS = {
+  new_flight: 'NEW', seats_available: 'AVAILABLE',
+  seats_changed: 'CHANGED', seats_decreased: 'DROPPING', flight_removed: 'REMOVED',
+};
+
 function showAlert(changes) {
-  const activeDateSet = new Set(getActiveDates());
-  const important = changes.filter(c =>
-    (c.direction || 'outbound') === currentDirection &&
-    activeDateSet.has(c.date) && (
-      (c.change_type === 'new_flight' && c.new_seats !== null && c.new_seats >= minSeats) ||
-      (c.change_type === 'seats_changed' && c.new_seats !== null && c.new_seats >= minSeats && (c.old_seats === null || c.old_seats < minSeats))
-    )
-  );
-  if (!important.length) return;
+  if (!ntfyConfigs.some(c => c.enabled)) return;
+
+  const matching = changes.filter(c => matchesAnyConfig(c));
+  if (!matching.length) return;
 
   playAlert();
 
   const banner = document.getElementById('alertBanner');
-  document.getElementById('alertTitle').textContent = `${important.length} flight${important.length > 1 ? 's' : ''} now available!`;
+  document.getElementById('alertTitle').textContent = `${matching.length} flight alert${matching.length > 1 ? 's' : ''}!`;
 
-  const listHtml = important.map(c => {
+  const listHtml = matching.map(c => {
     const dest = c.destination || '';
     const code = extractCode(dest);
     const name = extractName(dest);
-    const seatsLabel = c.new_seats >= 9 ? '9+' : c.new_seats;
-    const prevInfo = (c.change_type === 'seats_changed' && c.old_seats !== null)
-      ? ` (was ${c.old_seats})` : '';
+    const dir = c.direction || 'outbound';
+    const route = dir === 'inbound' ? `${code} → TLV` : `TLV → ${code}`;
+
+    let seatsInfo = '';
+    if (c.change_type === 'flight_removed') {
+      seatsInfo = 'removed';
+    } else if (c.change_type === 'seats_changed' && c.old_seats != null) {
+      seatsInfo = `${c.old_seats} → ${c.new_seats >= 9 ? '9+' : c.new_seats}`;
+    } else if (c.new_seats != null) {
+      seatsInfo = `${c.new_seats >= 9 ? '9+' : c.new_seats} seats`;
+    }
 
     const match = flights.find(f => f.flight_number === c.flight_number && f.time === c.time && f.date === c.date);
     let url = match?.book_url;
-    if (!url && code) {
-      const dd = c.date.split('.')[0];
-      const mm = c.date.split('.')[1];
-      const dir = c.direction || 'outbound';
+    if (!url && code && c.change_type !== 'flight_removed') {
+      const [dd, mm] = c.date.split('.');
       url = dir === 'inbound'
         ? `https://www.elal.com/heb/book-a-flight?from=${code}&dest=TLV&dtfrom=2026-${mm}-${dd}&journey=one_way`
         : `https://www.elal.com/heb/book-a-flight?from=TLV&dest=${code}&dtfrom=2026-${mm}-${dd}&journey=one_way`;
@@ -1236,10 +1275,10 @@ function showAlert(changes) {
     const tag = url ? 'a' : 'div';
     const linkAttrs = url ? ` href="${url}" target="_blank" rel="noopener"` : '';
     return `<${tag} class="alert-flight"${linkAttrs}>
-      <span class="af-dest">${code}</span>
+      <span class="af-dest">${route}</span>
       <span class="af-fn">${c.flight_number}</span>
-      <span class="af-detail">${name} · ${c.time} · ${c.date}${prevInfo}</span>
-      <span class="af-seats">${seatsLabel} seats</span>
+      <span class="af-detail">${name} · ${c.time} · ${c.date}</span>
+      <span class="af-seats">${seatsInfo}</span>
     </${tag}>`;
   }).join('');
   document.getElementById('alertList').innerHTML = listHtml;
@@ -1247,13 +1286,16 @@ function showAlert(changes) {
   banner.classList.add('show');
   setTimeout(() => banner.classList.remove('show'), 20000);
 
-  const notifLines = important.map(c => {
+  const notifLines = matching.map(c => {
     const code = extractCode(c.destination || '');
     const name = extractName(c.destination || '');
-    return `${code} ${c.flight_number} · ${name} · ${c.time} · ${c.date} → ${c.new_seats >= 9 ? '9+' : c.new_seats} seats`;
+    const dir = c.direction || 'outbound';
+    const route = dir === 'inbound' ? `${code}→TLV` : `TLV→${code}`;
+    const seats = c.new_seats != null ? (c.new_seats >= 9 ? '9+' : c.new_seats) + ' seats' : '';
+    return `${route} ${c.flight_number} · ${name} · ${c.time} · ${c.date} ${seats}`;
   });
   sendNotification(
-    `El Al — ${important.length} flight${important.length > 1 ? 's' : ''} available!`,
+    `El Al — ${matching.length} flight alert${matching.length > 1 ? 's' : ''}!`,
     notifLines.join('\n')
   );
 }
@@ -1319,6 +1361,7 @@ function connect() {
 
 if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
 connect();
+loadNtfyConfigs();
 
 // ── ntfy settings (multi-config) ──
 let ntfyConfigs = [];
@@ -1392,6 +1435,8 @@ function ntfyEditNew() {
   ntfyDirection = 'both';
   updateNtfyModeUI();
   updateNtfyDirectionUI();
+  updateNtfyDestLabels();
+  document.getElementById('ntfyDestSearch').value = '';
   renderNtfyDests();
   applyTriggersToUI();
   document.getElementById('ntfyDeleteBtn').style.display = 'none';
@@ -1414,6 +1459,8 @@ function ntfyEdit(id) {
   ntfyDirection = cfg.direction || 'both';
   updateNtfyModeUI();
   updateNtfyDirectionUI();
+  updateNtfyDestLabels();
+  document.getElementById('ntfyDestSearch').value = '';
   renderNtfyDests();
   applyTriggersToUI();
   document.getElementById('ntfyDeleteBtn').style.display = '';
@@ -1440,6 +1487,8 @@ function updateNtfyModeUI() {
 function setNtfyDirection(dir) {
   ntfyDirection = dir;
   updateNtfyDirectionUI();
+  updateNtfyDestLabels();
+  renderNtfyDests();
 }
 
 function updateNtfyDirectionUI() {
@@ -1448,12 +1497,35 @@ function updateNtfyDirectionUI() {
   document.getElementById('ntfyDirBoth').classList.toggle('active', ntfyDirection === 'both');
 }
 
+function updateNtfyDestLabels() {
+  const isInbound = ntfyDirection === 'inbound';
+  document.getElementById('ntfyDestModeLabel').textContent = isInbound ? 'Origins' : 'Destinations';
+  document.getElementById('ntfyDestSelectLabel').textContent = isInbound ? 'Select Origins' : 'Select Destinations';
+}
+
+function getNtfyDestMap() {
+  const map = {};
+  flights.forEach(f => {
+    const fDir = f.direction || 'outbound';
+    if (ntfyDirection !== 'both' && fDir !== ntfyDirection) return;
+    const code = extractCode(f.destination);
+    if (!map[code]) map[code] = { code, name: extractName(f.destination) };
+  });
+  return map;
+}
+
 function renderNtfyDests() {
   const list = document.getElementById('ntfyDestList');
-  const destMap = getDestMap();
-  const dests = Object.values(destMap).sort((a, b) => a.code.localeCompare(b.code));
-  if (dests.length === 0) {
+  const destMap = getNtfyDestMap();
+  const allDests = Object.values(destMap).sort((a, b) => a.code.localeCompare(b.code));
+  if (allDests.length === 0) {
     list.innerHTML = '<div style="padding:0.8rem;color:var(--text-faint);font-size:0.78rem;text-align:center">No destinations yet</div>';
+    return;
+  }
+  const q = (document.getElementById('ntfyDestSearch')?.value || '').toLowerCase().trim();
+  const dests = q ? allDests.filter(d => d.code.toLowerCase().includes(q) || d.name.toLowerCase().includes(q)) : allDests;
+  if (dests.length === 0) {
+    list.innerHTML = '<div style="padding:0.8rem;color:var(--text-faint);font-size:0.78rem;text-align:center">No match</div>';
     return;
   }
   list.innerHTML = dests.map(d => {
