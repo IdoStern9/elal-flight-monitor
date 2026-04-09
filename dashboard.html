@@ -622,7 +622,7 @@ a.seat-pill.available:hover { background: var(--green-glow); border-color: var(-
 <!-- ─── Sidebar: Destinations ─── -->
 <div class="sidebar" id="sidebar">
   <div class="sidebar-header">
-    <span>Destinations</span>
+    <span id="sidebarTitle">Destinations</span>
     <span id="destCount" style="font-family:var(--mono);font-weight:400"></span>
   </div>
   <input class="sidebar-search" id="destSearch" type="text" placeholder="Search…">
@@ -905,6 +905,7 @@ function updateDirectionUI() {
   document.getElementById('dirOutBtn').classList.toggle('active', currentDirection === 'outbound');
   document.getElementById('dirInBtn').classList.toggle('active', currentDirection === 'inbound');
   document.getElementById('dateBarLabel').textContent = currentDirection === 'inbound' ? '→ TLV' : 'TLV →';
+  document.getElementById('sidebarTitle').textContent = currentDirection === 'inbound' ? 'Origins' : 'Destinations';
 }
 
 // Restore saved date selection (only keep dates still in the week window)
