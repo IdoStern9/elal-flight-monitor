@@ -16,6 +16,7 @@ class FlightRecord:
     date: str  # DD.MM format
     seats: Optional[int]  # None = no flight/no data
     book_url: Optional[str] = None
+    direction: str = "outbound"  # outbound (TLV->) or inbound (->TLV)
 
 
 @dataclass
@@ -28,6 +29,7 @@ class Change:
     old_seats: Optional[int]
     new_seats: Optional[int]
     change_type: str  # new_flight, seats_changed, flight_removed
+    direction: str = "outbound"
 
 
 def init_db():
@@ -40,15 +42,19 @@ def init_db():
             date TEXT NOT NULL,
             seats INTEGER,
             book_url TEXT,
+            direction TEXT NOT NULL DEFAULT 'outbound',
             last_seen_at TEXT NOT NULL,
             PRIMARY KEY (flight_number, date, time)
         )
     """)
-    # Migrate: add book_url column if missing (existing DBs)
-    try:
-        conn.execute("ALTER TABLE flights ADD COLUMN book_url TEXT")
-    except sqlite3.OperationalError:
-        pass
+    for col, default in [("book_url", None), ("direction", "'outbound'")]:
+        try:
+            ddl = f"ALTER TABLE flights ADD COLUMN {col} TEXT"
+            if default is not None:
+                ddl += f" NOT NULL DEFAULT {default}"
+            conn.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
     conn.execute("""
         CREATE TABLE IF NOT EXISTS changes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,13 +65,15 @@ def init_db():
             date TEXT NOT NULL,
             old_seats INTEGER,
             new_seats INTEGER,
-            change_type TEXT NOT NULL
+            change_type TEXT NOT NULL,
+            direction TEXT NOT NULL DEFAULT 'outbound'
         )
     """)
-    try:
-        conn.execute("ALTER TABLE changes ADD COLUMN destination TEXT NOT NULL DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
+    for col, default in [("destination", "''"), ("direction", "'outbound'")]:
+        try:
+            conn.execute(f"ALTER TABLE changes ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
+        except sqlite3.OperationalError:
+            pass
     conn.commit()
     conn.close()
 
@@ -73,7 +81,7 @@ def init_db():
 def get_current_flights() -> dict:
     """Return current flights as {(flight_number, date, time): FlightRecord}."""
     conn = sqlite3.connect(DB_PATH)
-    rows = conn.execute("SELECT flight_number, destination, time, date, seats, book_url FROM flights").fetchall()
+    rows = conn.execute("SELECT flight_number, destination, time, date, seats, book_url, direction FROM flights").fetchall()
     conn.close()
     result = {}
     for row in rows:
@@ -105,6 +113,7 @@ def process_scrape(new_records: List[FlightRecord]) -> List[Change]:
                     old_seats=None,
                     new_seats=rec.seats,
                     change_type="new_flight",
+                    direction=rec.direction,
                 ))
         else:
             old = current[key]
@@ -118,37 +127,38 @@ def process_scrape(new_records: List[FlightRecord]) -> List[Change]:
                     old_seats=old.seats,
                     new_seats=rec.seats,
                     change_type="seats_changed",
+                    direction=rec.direction,
                 ))
 
     # Write changes to DB (skip removal events -- stale data cleaned separately)
     conn = sqlite3.connect(DB_PATH)
     for ch in changes:
         conn.execute(
-            "INSERT INTO changes (timestamp, flight_number, destination, time, date, old_seats, new_seats, change_type) VALUES (?,?,?,?,?,?,?,?)",
-            (ch.timestamp, ch.flight_number, ch.destination, ch.time, ch.date, ch.old_seats, ch.new_seats, ch.change_type),
+            "INSERT INTO changes (timestamp, flight_number, destination, time, date, old_seats, new_seats, change_type, direction) VALUES (?,?,?,?,?,?,?,?,?)",
+            (ch.timestamp, ch.flight_number, ch.destination, ch.time, ch.date, ch.old_seats, ch.new_seats, ch.change_type, ch.direction),
         )
 
     # Upsert flights
     for rec in new_records:
         conn.execute(
-            "INSERT INTO flights (flight_number, destination, time, date, seats, book_url, last_seen_at) VALUES (?,?,?,?,?,?,?) "
-            "ON CONFLICT(flight_number, date, time) DO UPDATE SET seats=excluded.seats, book_url=excluded.book_url, last_seen_at=excluded.last_seen_at",
-            (rec.flight_number, rec.destination, rec.time, rec.date, rec.seats, rec.book_url, now),
+            "INSERT INTO flights (flight_number, destination, time, date, seats, book_url, direction, last_seen_at) VALUES (?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(flight_number, date, time) DO UPDATE SET seats=excluded.seats, book_url=excluded.book_url, direction=excluded.direction, last_seen_at=excluded.last_seen_at",
+            (rec.flight_number, rec.destination, rec.time, rec.date, rec.seats, rec.book_url, rec.direction, now),
         )
 
     # Only remove flights not seen for 5+ consecutive minutes (avoids
     # deleting data that a single incomplete scroll missed)
     stale_cutoff = (datetime.now() - timedelta(minutes=5)).isoformat(timespec="seconds")
     stale = conn.execute(
-        "SELECT flight_number, date, time, destination, seats FROM flights WHERE last_seen_at < ?",
+        "SELECT flight_number, date, time, destination, seats, direction FROM flights WHERE last_seen_at < ?",
         (stale_cutoff,),
     ).fetchall()
     for row in stale:
-        fn, date, time, dest, seats = row
+        fn, date, time, dest, seats, direction = row
         changes.append(Change(
             timestamp=now, flight_number=fn, destination=dest,
             time=time, date=date, old_seats=seats, new_seats=None,
-            change_type="flight_removed",
+            change_type="flight_removed", direction=direction or "outbound",
         ))
         conn.execute("DELETE FROM flights WHERE flight_number=? AND date=? AND time=?", (fn, date, time))
 
@@ -160,11 +170,11 @@ def process_scrape(new_records: List[FlightRecord]) -> List[Change]:
 def get_flights_json() -> list:
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute(
-        "SELECT flight_number, destination, time, date, seats, book_url, last_seen_at FROM flights ORDER BY date, time"
+        "SELECT flight_number, destination, time, date, seats, book_url, direction, last_seen_at FROM flights ORDER BY date, time"
     ).fetchall()
     conn.close()
     return [
-        {"flight_number": r[0], "destination": r[1], "time": r[2], "date": r[3], "seats": r[4], "book_url": r[5], "last_seen_at": r[6]}
+        {"flight_number": r[0], "destination": r[1], "time": r[2], "date": r[3], "seats": r[4], "book_url": r[5], "direction": r[6] or "outbound", "last_seen_at": r[7]}
         for r in rows
     ]
 
@@ -172,12 +182,12 @@ def get_flights_json() -> list:
 def get_changes_json(limit: int = 100) -> list:
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute(
-        "SELECT timestamp, flight_number, destination, time, date, old_seats, new_seats, change_type FROM changes ORDER BY id DESC LIMIT ?",
+        "SELECT timestamp, flight_number, destination, time, date, old_seats, new_seats, change_type, direction FROM changes ORDER BY id DESC LIMIT ?",
         (limit,),
     ).fetchall()
     conn.close()
     return [
-        {"timestamp": r[0], "flight_number": r[1], "destination": r[2], "time": r[3], "date": r[4], "old_seats": r[5], "new_seats": r[6], "change_type": r[7]}
+        {"timestamp": r[0], "flight_number": r[1], "destination": r[2], "time": r[3], "date": r[4], "old_seats": r[5], "new_seats": r[6], "change_type": r[7], "direction": r[8] or "outbound"}
         for r in rows
     ]
 
@@ -201,13 +211,18 @@ def _ensure_ntfy_table():
             mode TEXT NOT NULL DEFAULT 'all',
             min_seats INTEGER NOT NULL DEFAULT 1,
             destinations TEXT NOT NULL DEFAULT '[]',
-            triggers TEXT NOT NULL DEFAULT '["new_flight","seats_available"]'
+            triggers TEXT NOT NULL DEFAULT '["new_flight","seats_available"]',
+            direction TEXT NOT NULL DEFAULT 'both'
         )
     """)
-    try:
-        conn.execute("ALTER TABLE ntfy_configs ADD COLUMN triggers TEXT NOT NULL DEFAULT '[\"new_flight\",\"seats_available\"]'")
-    except sqlite3.OperationalError:
-        pass
+    for col, default in [
+        ("triggers", """'["new_flight","seats_available"]'"""),
+        ("direction", "'both'"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE ntfy_configs ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}")
+        except sqlite3.OperationalError:
+            pass
     # Migrate from old single-row table if it exists
     try:
         row = conn.execute("SELECT enabled, server_url, topic, mode, min_seats, destinations FROM ntfy_config WHERE id=1").fetchone()
@@ -234,10 +249,11 @@ def _row_to_dict(row) -> dict:
         "min_seats": row[6],
         "destinations": json.loads(row[7]),
         "triggers": json.loads(row[8]) if row[8] else list(DEFAULT_TRIGGERS),
+        "direction": row[9] if len(row) > 9 and row[9] else "both",
     }
 
 
-_NTFY_COLS = "id, name, enabled, server_url, topic, mode, min_seats, destinations, triggers"
+_NTFY_COLS = "id, name, enabled, server_url, topic, mode, min_seats, destinations, triggers, direction"
 
 
 def get_all_ntfy_configs() -> list:
@@ -269,16 +285,17 @@ def save_ntfy_config(cfg: dict) -> dict:
         int(cfg.get("min_seats", 1)),
         json.dumps(cfg.get("destinations", [])),
         json.dumps(cfg.get("triggers", list(DEFAULT_TRIGGERS))),
+        cfg.get("direction", "both"),
     )
     config_id = cfg.get("id")
     if config_id:
         conn.execute(
-            "UPDATE ntfy_configs SET name=?, enabled=?, server_url=?, topic=?, mode=?, min_seats=?, destinations=?, triggers=? WHERE id=?",
+            "UPDATE ntfy_configs SET name=?, enabled=?, server_url=?, topic=?, mode=?, min_seats=?, destinations=?, triggers=?, direction=? WHERE id=?",
             params + (config_id,),
         )
     else:
         cur = conn.execute(
-            "INSERT INTO ntfy_configs (name, enabled, server_url, topic, mode, min_seats, destinations, triggers) VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO ntfy_configs (name, enabled, server_url, topic, mode, min_seats, destinations, triggers, direction) VALUES (?,?,?,?,?,?,?,?,?)",
             params,
         )
         config_id = cur.lastrowid

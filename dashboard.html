@@ -534,6 +534,7 @@ a.seat-pill.available:hover { background: var(--green-glow); border-color: var(-
 .date-bar::-webkit-scrollbar { height: 3px; }
 .date-bar::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 2px; }
 .date-bar-label { font-size: 0.78rem; color: var(--text-faint); font-weight: 600; margin-inline-end: 0.3rem; white-space: nowrap; }
+#dateBtnsContainer { display: contents; }
 .date-btn {
   background: var(--surface2); border: 1px solid var(--border); color: var(--text-dim);
   padding: 0.2rem 0.5rem; border-radius: 6px; font-size: 0.78rem;
@@ -547,6 +548,22 @@ a.seat-pill.available:hover { background: var(--green-glow); border-color: var(-
 .date-btn.active .day-name { color: var(--accent); }
 .date-btn.no-data { opacity: 0.4; }
 .date-btn.no-data.active { opacity: 0.6; }
+
+/* ── Direction toggle ── */
+.dir-toggle {
+  display: inline-flex; border-radius: 6px; overflow: hidden;
+  border: 1px solid var(--border); flex-shrink: 0; margin-inline-end: 0.5rem;
+}
+.dir-btn {
+  padding: 0.22rem 0.6rem; font-size: 0.75rem; font-family: var(--font);
+  font-weight: 600; cursor: pointer; border: none;
+  background: var(--surface2); color: var(--text-dim); transition: all 0.15s;
+  white-space: nowrap; display: flex; align-items: center; gap: 0.3rem;
+  user-select: none; outline: none;
+}
+.dir-btn + .dir-btn { border-inline-start: 1px solid var(--border); }
+.dir-btn:hover { color: var(--text); background: var(--accent-dim); }
+.dir-btn.active { background: var(--accent); color: #fff; }
 
 @media (max-width: 800px) {
   .sidebar { width: 100%; transform: translateX(100%); }
@@ -594,7 +611,12 @@ a.seat-pill.available:hover { background: var(--green-glow); border-color: var(-
 
 <!-- ─── Date bar ─── -->
 <div class="date-bar" id="dateBar">
-  <span class="date-bar-label">Dates:</span>
+  <div class="dir-toggle">
+    <button class="dir-btn active" id="dirOutBtn" onclick="setDirection('outbound')">From Israel ✈→</button>
+    <button class="dir-btn" id="dirInBtn" onclick="setDirection('inbound')">←✈ To Israel</button>
+  </div>
+  <span class="date-bar-label" id="dateBarLabel"></span>
+  <span id="dateBtnsContainer"></span>
 </div>
 
 <!-- ─── Sidebar: Destinations ─── -->
@@ -672,6 +694,15 @@ a.seat-pill.available:hover { background: var(--green-glow); border-color: var(-
     <div class="ntfy-field">
       <label>Min Seats</label>
       <input type="number" id="ntfyMinSeats" min="1" max="9" value="1" style="width:70px">
+    </div>
+
+    <div class="ntfy-field">
+      <label>Direction</label>
+      <div class="ntfy-radio-group">
+        <div class="ntfy-radio" id="ntfyDirOut" onclick="setNtfyDirection('outbound')">From Israel</div>
+        <div class="ntfy-radio" id="ntfyDirIn" onclick="setNtfyDirection('inbound')">To Israel</div>
+        <div class="ntfy-radio active" id="ntfyDirBoth" onclick="setNtfyDirection('both')">Both</div>
+      </div>
     </div>
 
     <div class="ntfy-field">
@@ -798,6 +829,7 @@ let clOpen = false;
 let collapsedGroups = new Set();
 let scrapedDates = new Set();
 let selectedDates = new Set();
+let currentDirection = localStorage.getItem('direction') || 'outbound';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -834,8 +866,8 @@ function getActiveDates() {
 }
 
 function renderDateBar() {
-  const bar = document.getElementById('dateBar');
-  let html = '<span class="date-bar-label">TLV&nbsp;→</span>';
+  updateDirectionUI();
+  let html = '';
   weekDates.forEach(d => {
     const isSelected = selectedDates.has(d) || selectedDates.size === 0;
     const hasData = scrapedDates.has(d);
@@ -846,7 +878,7 @@ function renderDateBar() {
     const full = dateToFull(d);
     html += `<button class="${cls}" onclick="toggleDate('${d}')"><span class="day-name">${dayName}</span><span>${full}</span></button>`;
   });
-  bar.innerHTML = html;
+  document.getElementById('dateBtnsContainer').innerHTML = html;
 }
 
 function toggleDate(d) {
@@ -858,6 +890,20 @@ function toggleDate(d) {
   localStorage.setItem('selectedDates', JSON.stringify([...selectedDates]));
   renderDateBar();
   render();
+}
+
+function setDirection(dir) {
+  currentDirection = dir;
+  localStorage.setItem('direction', dir);
+  selectedDests.clear();
+  collapsedGroups.clear();
+  render();
+}
+
+function updateDirectionUI() {
+  document.getElementById('dirOutBtn').classList.toggle('active', currentDirection === 'outbound');
+  document.getElementById('dirInBtn').classList.toggle('active', currentDirection === 'inbound');
+  document.getElementById('dateBarLabel').textContent = currentDirection === 'inbound' ? '→ TLV' : 'TLV →';
 }
 
 // Restore saved date selection (only keep dates still in the week window)
@@ -923,6 +969,7 @@ function getDestMap() {
   const dateSet = new Set(dates);
   const map = {};
   flights.forEach(f => {
+    if ((f.direction || 'outbound') !== currentDirection) return;
     if (!dateSet.has(f.date)) return;
     const code = extractCode(f.destination);
     if (!map[code]) map[code] = { code, fullName: f.destination, name: extractName(f.destination), flights: new Set(), maxSeats: 0 };
@@ -996,6 +1043,7 @@ function renderFlights() {
   const dateSet = new Set(DATES);
 
   const visible = flights.filter(f => {
+    if ((f.direction || 'outbound') !== currentDirection) return false;
     if (!dateSet.has(f.date)) return false;
     const code = extractCode(f.destination);
     return selectedDests.size === 0 || selectedDests.has(code);
@@ -1153,6 +1201,7 @@ function renderChanges(data) {
 function showAlert(changes) {
   const activeDateSet = new Set(getActiveDates());
   const important = changes.filter(c =>
+    (c.direction || 'outbound') === currentDirection &&
     activeDateSet.has(c.date) && (
       (c.change_type === 'new_flight' && c.new_seats !== null && c.new_seats >= minSeats) ||
       (c.change_type === 'seats_changed' && c.new_seats !== null && c.new_seats >= minSeats && (c.old_seats === null || c.old_seats < minSeats))
@@ -1178,7 +1227,10 @@ function showAlert(changes) {
     if (!url && code) {
       const dd = c.date.split('.')[0];
       const mm = c.date.split('.')[1];
-      url = `https://www.elal.com/heb/book-a-flight?from=TLV&dest=${code}&dtfrom=2026-${mm}-${dd}&journey=one_way`;
+      const dir = c.direction || 'outbound';
+      url = dir === 'inbound'
+        ? `https://www.elal.com/heb/book-a-flight?from=${code}&dest=TLV&dtfrom=2026-${mm}-${dd}&journey=one_way`
+        : `https://www.elal.com/heb/book-a-flight?from=TLV&dest=${code}&dtfrom=2026-${mm}-${dd}&journey=one_way`;
     }
 
     const tag = url ? 'a' : 'div';
@@ -1274,6 +1326,7 @@ let ntfyEditId = null;
 let ntfyMode = 'all';
 let ntfySelectedDests = new Set();
 let ntfyTriggers = new Set(['new_flight', 'seats_available']);
+let ntfyDirection = 'both';
 
 function toggleNtfyDrawer() {
   const drawer = document.getElementById('ntfyDrawer');
@@ -1313,7 +1366,8 @@ function renderNtfyList() {
   container.innerHTML = ntfyConfigs.map(cfg => {
     const destInfo = cfg.mode === 'all' ? 'All dest.' : `${cfg.destinations.length} dest.`;
     const trigCount = (cfg.triggers || []).length;
-    const detail = cfg.topic ? `${cfg.topic} | ${destInfo} | ${trigCount} trigger${trigCount !== 1 ? 's' : ''} | min ${cfg.min_seats}` : 'Not configured';
+    const dirLabel = cfg.direction === 'outbound' ? 'From IL' : cfg.direction === 'inbound' ? 'To IL' : 'Both';
+    const detail = cfg.topic ? `${cfg.topic} | ${dirLabel} | ${destInfo} | ${trigCount} trigger${trigCount !== 1 ? 's' : ''} | min ${cfg.min_seats}` : 'Not configured';
     return `<div class="ntfy-config-item" onclick="ntfyEdit(${cfg.id})">
       <div class="nci-status ${cfg.enabled ? 'on' : 'off'}"></div>
       <div class="nci-info">
@@ -1335,7 +1389,9 @@ function ntfyEditNew() {
   ntfyMode = 'all';
   ntfySelectedDests = new Set();
   ntfyTriggers = new Set(['new_flight', 'seats_available']);
+  ntfyDirection = 'both';
   updateNtfyModeUI();
+  updateNtfyDirectionUI();
   renderNtfyDests();
   applyTriggersToUI();
   document.getElementById('ntfyDeleteBtn').style.display = 'none';
@@ -1355,7 +1411,9 @@ function ntfyEdit(id) {
   ntfyMode = cfg.mode || 'all';
   ntfySelectedDests = new Set(cfg.destinations || []);
   ntfyTriggers = new Set(cfg.triggers || ['new_flight', 'seats_available']);
+  ntfyDirection = cfg.direction || 'both';
   updateNtfyModeUI();
+  updateNtfyDirectionUI();
   renderNtfyDests();
   applyTriggersToUI();
   document.getElementById('ntfyDeleteBtn').style.display = '';
@@ -1377,6 +1435,17 @@ function updateNtfyModeUI() {
   document.getElementById('ntfyModeAll').classList.toggle('active', ntfyMode === 'all');
   document.getElementById('ntfyModeSelected').classList.toggle('active', ntfyMode === 'selected');
   document.getElementById('ntfyDestField').style.display = ntfyMode === 'selected' ? '' : 'none';
+}
+
+function setNtfyDirection(dir) {
+  ntfyDirection = dir;
+  updateNtfyDirectionUI();
+}
+
+function updateNtfyDirectionUI() {
+  document.getElementById('ntfyDirOut').classList.toggle('active', ntfyDirection === 'outbound');
+  document.getElementById('ntfyDirIn').classList.toggle('active', ntfyDirection === 'inbound');
+  document.getElementById('ntfyDirBoth').classList.toggle('active', ntfyDirection === 'both');
 }
 
 function renderNtfyDests() {
@@ -1431,6 +1500,7 @@ function _getEditFormData() {
     min_seats: parseInt(document.getElementById('ntfyMinSeats').value) || 1,
     destinations: [...ntfySelectedDests],
     triggers: [...ntfyTriggers],
+    direction: ntfyDirection,
   };
 }
 

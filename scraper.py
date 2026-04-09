@@ -94,6 +94,12 @@ def _extract_iata(destination: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+DIRECTION_URLS = {
+    "outbound": URL,
+    "inbound": URL + "?d=1",
+}
+
+
 class Scraper:
     def __init__(self):
         self._playwright = None
@@ -146,28 +152,7 @@ class Scraper:
             self._page_ready = False
             raise
 
-    async def _do_scrape(self, page: Page) -> ScrapeResult:
-        if self._page_ready:
-            logger.info("Reloading seat availability page...")
-            await page.reload(wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(2000)
-        else:
-            logger.info("Navigating to El Al seat availability page...")
-            await page.goto(URL, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(3000)
-
-            try:
-                btn = page.locator('button:has-text("I understand")')
-                if await btn.count() > 0:
-                    await btn.first.click()
-                    await page.wait_for_timeout(500)
-            except Exception:
-                pass
-
-        await page.wait_for_selector(".seat-availability-page", state="attached", timeout=25000)
-        await page.wait_for_selector(".header-date", state="attached", timeout=20000)
-        await page.wait_for_timeout(1000)
-
+    async def _scroll_all(self, page: Page) -> int:
         prev_count = 0
         stable_rounds = 0
         for _ in range(40):
@@ -181,43 +166,25 @@ class Scraper:
             else:
                 stable_rounds = 0
                 prev_count = count
-
-        logger.info("Scrolled page, loaded %d flight items", prev_count)
-
         await page.evaluate("window.scrollTo(0, 0)")
         await page.wait_for_timeout(300)
+        return prev_count
 
-        self._page_ready = True
-
-        result = await page.evaluate(PARSE_JS)
-
-        if result.get("error"):
-            logger.error("Scrape parse error: %s", result["error"])
-            return []
-
-        logger.info(
-            "Parsed %d flight items, %d raw records, dates: %s",
-            result.get("flightCount", 0),
-            len(result.get("flights", [])),
-            result.get("dates", []),
-        )
-
-        available_dates = result.get("dates", [])
-
+    def _build_records(self, raw_flights: list, force_direction: str) -> List[FlightRecord]:
         records = []
-        for f in result.get("flights", []):
+        for f in raw_flights:
             if not f["fn"]:
                 continue
-            if f.get("dir") == "inbound":
-                continue
-
+            direction = force_direction or f.get("dir") or "outbound"
             book_url = f.get("url")
             if not book_url and f["seats"] is not None and f["seats"] > 0:
                 iata = _extract_iata(f["dest"])
                 if iata:
                     dd, mm = f["date"].split(".")
-                    book_url = f"https://www.elal.com/heb/book-a-flight?from=TLV&dest={iata}&dtfrom=2026-{mm}-{dd}&journey=one_way"
-
+                    if direction == "inbound":
+                        book_url = f"https://www.elal.com/heb/book-a-flight?from={iata}&dest=TLV&dtfrom=2026-{mm}-{dd}&journey=one_way"
+                    else:
+                        book_url = f"https://www.elal.com/heb/book-a-flight?from=TLV&dest={iata}&dtfrom=2026-{mm}-{dd}&journey=one_way"
             records.append(FlightRecord(
                 flight_number=f["fn"],
                 destination=f["dest"],
@@ -225,8 +192,66 @@ class Scraper:
                 date=f["date"],
                 seats=f["seats"],
                 book_url=book_url,
+                direction=direction,
             ))
+        return records
 
-        dests = set(r.destination for r in records)
-        logger.info("Scraped %d outbound records across %d destinations, dates: %s", len(records), len(dests), available_dates)
-        return ScrapeResult(records=records, available_dates=available_dates)
+    async def _scrape_tab(self, page: Page, direction: str) -> tuple:
+        """Scroll the current tab and parse flights. Returns (records, dates)."""
+        item_count = await self._scroll_all(page)
+        logger.info("Scrolled %s tab, loaded %d flight items", direction, item_count)
+
+        result = await page.evaluate(PARSE_JS)
+        if result.get("error"):
+            logger.error("Scrape parse error (%s): %s", direction, result["error"])
+            return [], []
+
+        available_dates = result.get("dates", [])
+        logger.info(
+            "Parsed %s: %d items, %d raw records, dates: %s",
+            direction, result.get("flightCount", 0),
+            len(result.get("flights", [])), available_dates,
+        )
+        records = self._build_records(result.get("flights", []), direction)
+        return records, available_dates
+
+    async def _load_page(self, page: Page, url: str):
+        """Navigate to a URL and wait for content to appear."""
+        logger.info("Navigating to %s ...", url)
+        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(2000)
+
+        if not self._page_ready:
+            try:
+                btn = page.locator('button:has-text("I understand")')
+                if await btn.count() > 0:
+                    await btn.first.click()
+                    await page.wait_for_timeout(500)
+            except Exception:
+                pass
+
+        await page.wait_for_selector(".seat-availability-page", state="attached", timeout=25000)
+        await page.wait_for_selector(".header-date", state="attached", timeout=20000)
+        await page.wait_for_timeout(1000)
+
+    async def _do_scrape(self, page: Page) -> ScrapeResult:
+        all_records: List[FlightRecord] = []
+        available_dates: List[str] = []
+
+        for direction in ("outbound", "inbound"):
+            await self._load_page(page, DIRECTION_URLS[direction])
+            records, dates = await self._scrape_tab(page, direction)
+            all_records.extend(records)
+            if dates:
+                available_dates = dates
+
+        self._page_ready = True
+
+        out_count = sum(1 for r in all_records if r.direction == "outbound")
+        in_count = sum(1 for r in all_records if r.direction == "inbound")
+        dests = set(r.destination for r in all_records)
+        logger.info(
+            "Scraped %d records (%d outbound, %d inbound) across %d destinations, dates: %s",
+            len(all_records), out_count, in_count, len(dests), available_dates,
+        )
+        return ScrapeResult(records=all_records, available_dates=available_dates)

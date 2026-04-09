@@ -32,6 +32,7 @@ class NtfyConfigBody(BaseModel):
     min_seats: int = 1
     destinations: List[str] = []
     triggers: List[str] = ["new_flight", "seats_available"]
+    direction: str = "both"
 
 
 logging.basicConfig(
@@ -93,12 +94,15 @@ def _match_trigger(cfg: dict, c: Change) -> Optional[str]:
     return None
 
 
+def _route_label(iata: str, direction: str) -> str:
+    return f"{iata} -> TLV" if direction == "inbound" else f"TLV -> {iata}"
+
 _TRIGGER_TITLES = {
-    "new_flight":      lambda iata, s, _o: f"New flight: TLV -> {iata} ({s} seats)",
-    "seats_available": lambda iata, s, o:  f"Seats available: TLV -> {iata} ({o} -> {s})",
-    "seats_changed":   lambda iata, s, o:  f"Seats update: TLV -> {iata} ({o} -> {s})",
-    "seats_decreased": lambda iata, s, o:  f"Seats dropping: TLV -> {iata} ({o} -> {s})",
-    "flight_removed":  lambda iata, _s, _o: f"Flight removed: TLV -> {iata}",
+    "new_flight":      lambda route, s, _o: f"New flight: {route} ({s} seats)",
+    "seats_available": lambda route, s, o:  f"Seats available: {route} ({o} -> {s})",
+    "seats_changed":   lambda route, s, o:  f"Seats update: {route} ({o} -> {s})",
+    "seats_decreased": lambda route, s, o:  f"Seats dropping: {route} ({o} -> {s})",
+    "flight_removed":  lambda route, _s, _o: f"Flight removed: {route}",
 }
 
 _TRIGGER_PRIORITY = {
@@ -122,8 +126,13 @@ async def _send_for_config(cfg: dict, changes: List[Change]):
     """Send one ntfy push per matching change."""
     global _http_client
     url = f"{cfg['server_url'].rstrip('/')}/{cfg['topic']}"
+    cfg_dir = cfg.get("direction", "both")
 
     for c in changes:
+        c_dir = getattr(c, "direction", "outbound") or "outbound"
+        if cfg_dir != "both" and c_dir != cfg_dir:
+            continue
+
         iata = _extract_iata(c.destination)
         if cfg["mode"] == "selected" and iata not in cfg["destinations"]:
             continue
@@ -135,12 +144,13 @@ async def _send_for_config(cfg: dict, changes: List[Change]):
         new_s = "9+" if (c.new_seats or 0) >= 9 else str(c.new_seats or 0)
         old_s = str(c.old_seats) if c.old_seats is not None else "0"
         dest_name = _dest_name_ascii(c.destination)
+        route = _route_label(iata, c_dir)
 
-        title = _TRIGGER_TITLES[trigger](iata, new_s, old_s)
+        title = _TRIGGER_TITLES[trigger](route, new_s, old_s)
 
         body_lines = [
             f"Flight: {c.flight_number}",
-            f"Route: TLV -> {iata} {dest_name}",
+            f"Route: {route} {dest_name}",
             f"Date: {c.date}",
             f"Time: {c.time}",
         ]
@@ -160,7 +170,10 @@ async def _send_for_config(cfg: dict, changes: List[Change]):
 
         if trigger != "flight_removed" and iata:
             dd, mm = c.date.split(".")
-            book_url = f"https://www.elal.com/heb/book-a-flight?from=TLV&dest={iata}&dtfrom=2026-{mm}-{dd}&journey=one_way"
+            if c_dir == "inbound":
+                book_url = f"https://www.elal.com/heb/book-a-flight?from={iata}&dest=TLV&dtfrom=2026-{mm}-{dd}&journey=one_way"
+            else:
+                book_url = f"https://www.elal.com/heb/book-a-flight?from=TLV&dest={iata}&dtfrom=2026-{mm}-{dd}&journey=one_way"
             headers["Click"] = book_url
 
         try:
@@ -228,6 +241,7 @@ async def run_scrape():
                     "old_seats": c.old_seats,
                     "new_seats": c.new_seats,
                     "change_type": c.change_type,
+                    "direction": c.direction,
                 }
                 for c in changes
             ],
@@ -266,6 +280,11 @@ app = FastAPI(lifespan=lifespan)
 async def dashboard():
     html_path = Path(__file__).parent / "dashboard.html"
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+@app.get("/sw.js")
+async def sw_stub():
+    return Response(content="", media_type="application/javascript")
 
 
 PLANE_SVG = (
