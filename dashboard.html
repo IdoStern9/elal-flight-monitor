@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>El Al Flight Monitor</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✈️</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -87,8 +88,25 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); min-
   width: 42px; background: var(--surface2); border: 1px solid var(--border);
   color: var(--text); padding: 0.2rem 0.3rem; border-radius: 4px;
   font-family: var(--mono); font-size: 0.75rem; text-align: center;
+  -moz-appearance: textfield; appearance: textfield;
 }
 .ctrl-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+.ctrl-input::-webkit-inner-spin-button,
+.ctrl-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+.topbar-control { position: relative; }
+.ctrl-spinner {
+  display: inline-flex; flex-direction: column; gap: 1px; margin-inline-start: 2px;
+}
+.ctrl-spinner button {
+  display: flex; align-items: center; justify-content: center;
+  width: 16px; height: 12px; padding: 0; border: 1px solid var(--border);
+  background: var(--surface2); color: var(--text-faint); border-radius: 3px;
+  cursor: pointer; font-size: 0.55rem; line-height: 1; transition: all 0.12s;
+  user-select: none; outline: none; caret-color: transparent;
+}
+.ctrl-spinner button:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.ctrl-spinner button:active { transform: scale(0.9); }
 .ctrl-btn {
   background: var(--surface2); border: 1px solid var(--border); color: var(--text-dim);
   padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.72rem;
@@ -352,6 +370,145 @@ a.seat-pill.available:hover { background: var(--green-glow); border-color: var(-
 .empty-state { text-align: center; padding: 3rem 1rem; color: var(--text-faint); font-size: 0.88rem; }
 .empty-state .empty-icon { font-size: 2rem; margin-bottom: 0.5rem; opacity: 0.4; }
 
+/* ── ntfy settings drawer ── */
+.ntfy-overlay {
+  display: none; position: fixed; inset: 0; z-index: 199;
+  background: rgba(0,0,0,0.35); backdrop-filter: blur(2px);
+}
+.ntfy-overlay.open { display: block; }
+.ntfy-drawer {
+  position: fixed; top: 0; left: 0; bottom: 0; z-index: 200;
+  width: 340px; max-width: 90vw; background: var(--surface);
+  border-inline-end: 1px solid var(--border);
+  transform: translateX(-100%); transition: transform 0.25s ease;
+  display: flex; flex-direction: column;
+  box-shadow: 8px 0 40px var(--shadow);
+}
+.ntfy-drawer.open { transform: translateX(0); }
+.ntfy-drawer-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.85rem 1.1rem; border-bottom: 1px solid var(--border);
+}
+.ntfy-drawer-header h3 { font-size: 0.92rem; font-weight: 700; display: flex; align-items: center; gap: 0.45rem; }
+.ntfy-drawer-close {
+  background: none; border: none; color: var(--text-dim); cursor: pointer;
+  font-size: 1.1rem; padding: 0.2rem 0.4rem; border-radius: 4px;
+}
+.ntfy-drawer-close:hover { background: var(--surface2); color: var(--text); }
+.ntfy-body { flex: 1; overflow-y: auto; padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: 0.85rem; }
+.ntfy-body::-webkit-scrollbar { width: 4px; }
+.ntfy-body::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 2px; }
+
+.ntfy-field { display: flex; flex-direction: column; gap: 0.3rem; }
+.ntfy-field label { font-size: 0.72rem; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+.ntfy-field input[type="text"], .ntfy-field input[type="number"] {
+  background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+  padding: 0.45rem 0.6rem; border-radius: 6px; font-family: var(--mono); font-size: 0.82rem;
+}
+.ntfy-field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+
+.ntfy-toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.5rem 0;
+}
+.ntfy-toggle-row span { font-size: 0.82rem; font-weight: 600; }
+.ntfy-switch {
+  position: relative; width: 40px; height: 22px; cursor: pointer;
+}
+.ntfy-switch input { opacity: 0; width: 0; height: 0; }
+.ntfy-switch .slider {
+  position: absolute; inset: 0; background: var(--surface3); border-radius: 11px; transition: 0.2s;
+}
+.ntfy-switch .slider::before {
+  content: ''; position: absolute; width: 16px; height: 16px; border-radius: 50%;
+  bottom: 3px; left: 3px; background: var(--text-dim); transition: 0.2s;
+}
+.ntfy-switch { user-select: none; outline: none; caret-color: transparent; }
+.ntfy-switch input:checked + .slider { background: var(--green); }
+.ntfy-switch input:checked + .slider::before { transform: translateX(18px); background: #fff; }
+
+.ntfy-radio-group { display: flex; gap: 0.5rem; }
+.ntfy-radio {
+  flex: 1; padding: 0.45rem 0.6rem; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface2); color: var(--text-dim); font-size: 0.78rem; font-weight: 600;
+  text-align: center; cursor: pointer; transition: all 0.12s;
+}
+.ntfy-radio.active { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+.ntfy-radio { user-select: none; outline: none; caret-color: transparent; }
+.ntfy-btn { user-select: none; outline: none; caret-color: transparent; }
+
+.ntfy-dest-list {
+  max-height: 180px; overflow-y: auto; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--surface2);
+}
+.ntfy-dest-list::-webkit-scrollbar { width: 4px; }
+.ntfy-dest-list::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 2px; }
+.ntfy-dest-item {
+  display: flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.6rem;
+  font-size: 0.78rem; cursor: pointer; transition: background 0.1s;
+}
+.ntfy-dest-item:hover { background: var(--accent-dim); }
+.ntfy-dest-item input[type="checkbox"] { accent-color: var(--accent); }
+.ntfy-dest-item .dest-code { font-family: var(--mono); font-weight: 600; min-width: 32px; }
+.ntfy-dest-item .dest-name { color: var(--text-dim); }
+
+.ntfy-actions { display: flex; gap: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
+.ntfy-btn {
+  flex: 1; padding: 0.5rem; border-radius: 6px; font-size: 0.78rem; font-weight: 600;
+  font-family: var(--font); cursor: pointer; border: 1px solid var(--border);
+  transition: all 0.15s; text-align: center;
+}
+.ntfy-btn-save { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ntfy-btn-save:hover { filter: brightness(1.1); }
+.ntfy-btn-test { background: var(--surface2); color: var(--text-dim); }
+.ntfy-btn-test:hover { border-color: var(--accent); color: var(--text); }
+.ntfy-status {
+  font-size: 0.72rem; text-align: center; min-height: 1.2em; color: var(--text-dim);
+  font-family: var(--mono);
+}
+.ntfy-status.ok { color: var(--green); }
+.ntfy-status.err { color: var(--red); }
+
+.ntfy-config-item {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.65rem 0.75rem; border-radius: 8px;
+  background: var(--surface2); border: 1px solid var(--border);
+  cursor: pointer; transition: all 0.12s; margin-bottom: 0.5rem;
+}
+.ntfy-config-item:hover { border-color: var(--accent); background: var(--accent-dim); }
+.ntfy-config-item .nci-status {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.ntfy-config-item .nci-status.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.ntfy-config-item .nci-status.off { background: var(--text-faint); opacity: 0.4; }
+.ntfy-config-item .nci-info { flex: 1; min-width: 0; }
+.ntfy-config-item .nci-name { font-size: 0.82rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ntfy-config-item .nci-detail { font-size: 0.7rem; color: var(--text-dim); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ntfy-config-item .nci-arrow { color: var(--text-faint); font-size: 0.75rem; flex-shrink: 0; }
+
+.ntfy-btn-add {
+  width: 100%; padding: 0.6rem; border-radius: 8px; font-size: 0.82rem; font-weight: 600;
+  font-family: var(--font); cursor: pointer; border: 1.5px dashed var(--border);
+  background: transparent; color: var(--text-dim); transition: all 0.15s;
+  user-select: none; outline: none; caret-color: transparent;
+}
+.ntfy-btn-add:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+
+.ntfy-back-btn {
+  background: none; border: none; color: var(--accent); cursor: pointer;
+  font-size: 0.78rem; font-weight: 600; font-family: var(--font); padding: 0;
+  margin-bottom: 0.3rem; user-select: none; outline: none; caret-color: transparent;
+}
+.ntfy-back-btn:hover { text-decoration: underline; }
+
+.ntfy-btn-delete {
+  background: var(--red-bg); border-color: var(--red); color: var(--red);
+  user-select: none; outline: none; caret-color: transparent;
+}
+.ntfy-btn-delete:hover { filter: brightness(1.2); }
+
+.ntfy-empty { text-align: center; padding: 2rem 1rem; color: var(--text-faint); font-size: 0.82rem; }
+
 /* ── Date bar ── */
 .date-bar {
   position: fixed; top: var(--header-h); left: 0; right: var(--sidebar-w); z-index: 40;
@@ -395,14 +552,23 @@ a.seat-pill.available:hover { background: var(--green-glow); border-color: var(-
   </div>
   <div class="topbar-controls">
     <div class="topbar-control">
-      <label>Min seats</label>
-      <input class="ctrl-input" id="minSeatsInput" type="number" min="1" max="9" value="1">
-    </div>
-    <div class="topbar-control">
       <label>Font size</label>
       <input class="ctrl-input" id="fontSizeInput" type="number" min="10" max="22" value="15">
+      <div class="ctrl-spinner">
+        <button onclick="stepInput('fontSizeInput', 1)">&#9650;</button>
+        <button onclick="stepInput('fontSizeInput', -1)">&#9660;</button>
+      </div>
+    </div>
+    <div class="topbar-control">
+      <label>Min seats</label>
+      <input class="ctrl-input" id="minSeatsInput" type="number" min="1" max="9" value="1">
+      <div class="ctrl-spinner">
+        <button onclick="stepInput('minSeatsInput', 1)">&#9650;</button>
+        <button onclick="stepInput('minSeatsInput', -1)">&#9660;</button>
+      </div>
     </div>
     <button class="ctrl-btn active" id="soundBtn" onclick="toggleSound()">🔊 Sound</button>
+    <button class="ctrl-btn" id="ntfyBtn" onclick="toggleNtfyDrawer()">🔔 Notifications</button>
     <button class="ctrl-btn" id="themeBtn" onclick="toggleTheme()">☀ Light</button>
     <div class="status-pill">
       <span class="status-dot wait" id="statusDot"></span>
@@ -450,6 +616,71 @@ a.seat-pill.available:hover { background: var(--green-glow); border-color: var(-
   </div>
 </div>
 
+<!-- ─── ntfy settings drawer ─── -->
+<div class="ntfy-overlay" id="ntfyOverlay" onclick="toggleNtfyDrawer()"></div>
+<div class="ntfy-drawer" id="ntfyDrawer">
+  <div class="ntfy-drawer-header">
+    <h3>🔔 Notifications</h3>
+    <button class="ntfy-drawer-close" onclick="toggleNtfyDrawer()">✕</button>
+  </div>
+
+  <!-- List view -->
+  <div class="ntfy-body" id="ntfyListView">
+    <div id="ntfyConfigList"></div>
+    <button class="ntfy-btn ntfy-btn-add" onclick="ntfyEditNew()">+ Add Notification</button>
+  </div>
+
+  <!-- Edit view (hidden by default) -->
+  <div class="ntfy-body" id="ntfyEditView" style="display:none">
+    <button class="ntfy-back-btn" onclick="ntfyBackToList()">← Back</button>
+
+    <div class="ntfy-field">
+      <label>Name</label>
+      <input type="text" id="ntfyName" placeholder="e.g. Barcelona alerts">
+    </div>
+
+    <div class="ntfy-toggle-row">
+      <span>Enabled</span>
+      <label class="ntfy-switch"><input type="checkbox" id="ntfyEnabled"><span class="slider"></span></label>
+    </div>
+
+    <div class="ntfy-field">
+      <label>Server URL</label>
+      <input type="text" id="ntfyServerUrl" value="https://ntfy.sh" placeholder="https://ntfy.sh">
+    </div>
+
+    <div class="ntfy-field">
+      <label>Topic</label>
+      <input type="text" id="ntfyTopic" placeholder="my-elal-alerts">
+    </div>
+
+    <div class="ntfy-field">
+      <label>Min Seats</label>
+      <input type="number" id="ntfyMinSeats" min="1" max="9" value="1" style="width:70px">
+    </div>
+
+    <div class="ntfy-field">
+      <label>Destinations</label>
+      <div class="ntfy-radio-group">
+        <div class="ntfy-radio active" id="ntfyModeAll" onclick="setNtfyMode('all')">All</div>
+        <div class="ntfy-radio" id="ntfyModeSelected" onclick="setNtfyMode('selected')">Selected</div>
+      </div>
+    </div>
+
+    <div class="ntfy-field" id="ntfyDestField" style="display:none">
+      <label>Select Destinations</label>
+      <div class="ntfy-dest-list" id="ntfyDestList"></div>
+    </div>
+
+    <div class="ntfy-actions">
+      <button class="ntfy-btn ntfy-btn-save" onclick="saveNtfyConfig()">Save</button>
+      <button class="ntfy-btn ntfy-btn-test" onclick="testNtfy()">Test</button>
+      <button class="ntfy-btn ntfy-btn-delete" id="ntfyDeleteBtn" onclick="deleteNtfyConfig()" style="display:none">Delete</button>
+    </div>
+    <div class="ntfy-status" id="ntfyStatus"></div>
+  </div>
+</div>
+
 <!-- ─── Change log toggle + drawer ─── -->
 <button class="changelog-toggle" id="clToggle" onclick="toggleChangelog()">
   Change Log <span class="cl-count" id="clCount">0</span>
@@ -474,6 +705,16 @@ let baseFontSize = parseInt(localStorage.getItem('fontSize') || '15', 10);
 const fontInput = document.getElementById('fontSizeInput');
 fontInput.value = baseFontSize;
 applyFontSize(baseFontSize);
+
+function stepInput(id, delta) {
+  const el = document.getElementById(id);
+  const min = parseInt(el.min) || -Infinity;
+  const max = parseInt(el.max) || Infinity;
+  const val = Math.max(min, Math.min(max, (parseInt(el.value) || 0) + delta));
+  el.value = val;
+  el.dispatchEvent(new Event('change'));
+  el.dispatchEvent(new Event('input'));
+}
 
 function applyFontSize(px) {
   document.documentElement.style.setProperty('--base-font', px + 'px');
@@ -980,6 +1221,218 @@ function connect() {
 
 if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
 connect();
+
+// ── ntfy settings (multi-config) ──
+let ntfyConfigs = [];
+let ntfyEditId = null;
+let ntfyMode = 'all';
+let ntfySelectedDests = new Set();
+
+function toggleNtfyDrawer() {
+  const drawer = document.getElementById('ntfyDrawer');
+  const overlay = document.getElementById('ntfyOverlay');
+  const open = drawer.classList.toggle('open');
+  overlay.classList.toggle('open', open);
+  if (open) { ntfyShowList(); loadNtfyConfigs(); }
+}
+
+function ntfyShowList() {
+  document.getElementById('ntfyListView').style.display = '';
+  document.getElementById('ntfyEditView').style.display = 'none';
+}
+
+function ntfyShowEdit() {
+  document.getElementById('ntfyListView').style.display = 'none';
+  document.getElementById('ntfyEditView').style.display = '';
+}
+
+async function loadNtfyConfigs() {
+  try {
+    const resp = await fetch('/api/ntfy/configs');
+    ntfyConfigs = await resp.json();
+    renderNtfyList();
+    updateNtfyBtn();
+  } catch (e) {
+    console.error('Failed to load ntfy configs', e);
+  }
+}
+
+function renderNtfyList() {
+  const container = document.getElementById('ntfyConfigList');
+  if (ntfyConfigs.length === 0) {
+    container.innerHTML = '<div class="ntfy-empty">No notifications configured yet</div>';
+    return;
+  }
+  container.innerHTML = ntfyConfigs.map(cfg => {
+    const destInfo = cfg.mode === 'all' ? 'All destinations' : `${cfg.destinations.length} destination${cfg.destinations.length !== 1 ? 's' : ''}`;
+    const detail = cfg.topic ? `${cfg.topic} · ${destInfo} · ≥${cfg.min_seats} seats` : 'Not configured';
+    return `<div class="ntfy-config-item" onclick="ntfyEdit(${cfg.id})">
+      <div class="nci-status ${cfg.enabled ? 'on' : 'off'}"></div>
+      <div class="nci-info">
+        <div class="nci-name">${cfg.name}</div>
+        <div class="nci-detail">${detail}</div>
+      </div>
+      <span class="nci-arrow">›</span>
+    </div>`;
+  }).join('');
+}
+
+function ntfyEditNew() {
+  ntfyEditId = null;
+  document.getElementById('ntfyName').value = '';
+  document.getElementById('ntfyEnabled').checked = true;
+  document.getElementById('ntfyServerUrl').value = 'https://ntfy.sh';
+  document.getElementById('ntfyTopic').value = '';
+  document.getElementById('ntfyMinSeats').value = '1';
+  ntfyMode = 'all';
+  ntfySelectedDests = new Set();
+  updateNtfyModeUI();
+  renderNtfyDests();
+  document.getElementById('ntfyDeleteBtn').style.display = 'none';
+  document.getElementById('ntfyStatus').textContent = '';
+  ntfyShowEdit();
+}
+
+function ntfyEdit(id) {
+  const cfg = ntfyConfigs.find(c => c.id === id);
+  if (!cfg) return;
+  ntfyEditId = id;
+  document.getElementById('ntfyName').value = cfg.name;
+  document.getElementById('ntfyEnabled').checked = cfg.enabled;
+  document.getElementById('ntfyServerUrl').value = cfg.server_url;
+  document.getElementById('ntfyTopic').value = cfg.topic;
+  document.getElementById('ntfyMinSeats').value = cfg.min_seats;
+  ntfyMode = cfg.mode || 'all';
+  ntfySelectedDests = new Set(cfg.destinations || []);
+  updateNtfyModeUI();
+  renderNtfyDests();
+  document.getElementById('ntfyDeleteBtn').style.display = '';
+  document.getElementById('ntfyStatus').textContent = '';
+  ntfyShowEdit();
+}
+
+function ntfyBackToList() {
+  ntfyShowList();
+  loadNtfyConfigs();
+}
+
+function setNtfyMode(mode) {
+  ntfyMode = mode;
+  updateNtfyModeUI();
+}
+
+function updateNtfyModeUI() {
+  document.getElementById('ntfyModeAll').classList.toggle('active', ntfyMode === 'all');
+  document.getElementById('ntfyModeSelected').classList.toggle('active', ntfyMode === 'selected');
+  document.getElementById('ntfyDestField').style.display = ntfyMode === 'selected' ? '' : 'none';
+}
+
+function renderNtfyDests() {
+  const list = document.getElementById('ntfyDestList');
+  const destMap = getDestMap();
+  const dests = Object.values(destMap).sort((a, b) => a.code.localeCompare(b.code));
+  if (dests.length === 0) {
+    list.innerHTML = '<div style="padding:0.8rem;color:var(--text-faint);font-size:0.78rem;text-align:center">No destinations yet</div>';
+    return;
+  }
+  list.innerHTML = dests.map(d => {
+    const checked = ntfySelectedDests.has(d.code) ? ' checked' : '';
+    return `<label class="ntfy-dest-item">
+      <input type="checkbox" value="${d.code}"${checked} onchange="toggleNtfyDest('${d.code}', this.checked)">
+      <span class="dest-code">${d.code}</span>
+      <span class="dest-name">${d.name}</span>
+    </label>`;
+  }).join('');
+}
+
+function toggleNtfyDest(code, checked) {
+  if (checked) ntfySelectedDests.add(code);
+  else ntfySelectedDests.delete(code);
+}
+
+function updateNtfyBtn() {
+  const btn = document.getElementById('ntfyBtn');
+  const anyEnabled = ntfyConfigs.some(c => c.enabled);
+  btn.classList.toggle('active', anyEnabled);
+  btn.textContent = anyEnabled ? '🔔 Notifications' : '🔕 Notifications';
+}
+
+function _getEditFormData() {
+  return {
+    id: ntfyEditId || undefined,
+    name: document.getElementById('ntfyName').value.trim() || 'Notification',
+    enabled: document.getElementById('ntfyEnabled').checked,
+    server_url: document.getElementById('ntfyServerUrl').value.trim() || 'https://ntfy.sh',
+    topic: document.getElementById('ntfyTopic').value.trim(),
+    mode: ntfyMode,
+    min_seats: parseInt(document.getElementById('ntfyMinSeats').value) || 1,
+    destinations: [...ntfySelectedDests],
+  };
+}
+
+async function saveNtfyConfig() {
+  const status = document.getElementById('ntfyStatus');
+  status.textContent = 'Saving…';
+  status.className = 'ntfy-status';
+  const cfg = _getEditFormData();
+  try {
+    const resp = await fetch('/api/ntfy/configs', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(cfg),
+    });
+    const saved = await resp.json();
+    if (saved.id) {
+      ntfyEditId = saved.id;
+      document.getElementById('ntfyDeleteBtn').style.display = '';
+      status.textContent = 'Saved';
+      status.className = 'ntfy-status ok';
+      await loadNtfyConfigs();
+    } else {
+      status.textContent = 'Save failed';
+      status.className = 'ntfy-status err';
+    }
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+    status.className = 'ntfy-status err';
+  }
+  setTimeout(() => { status.textContent = ''; status.className = 'ntfy-status'; }, 3000);
+}
+
+async function deleteNtfyConfig() {
+  if (!ntfyEditId || !confirm('Delete this notification?')) return;
+  try {
+    await fetch(`/api/ntfy/configs/${ntfyEditId}`, { method: 'DELETE' });
+    ntfyEditId = null;
+    await loadNtfyConfigs();
+    ntfyShowList();
+  } catch (e) {
+    console.error('Delete failed', e);
+  }
+}
+
+async function testNtfy() {
+  const status = document.getElementById('ntfyStatus');
+  await saveNtfyConfig();
+  if (!ntfyEditId) return;
+  status.textContent = 'Sending test…';
+  status.className = 'ntfy-status';
+  try {
+    const resp = await fetch(`/api/ntfy/test/${ntfyEditId}`, { method: 'POST' });
+    const result = await resp.json();
+    if (result.ok) {
+      status.textContent = 'Test sent! Check your phone.';
+      status.className = 'ntfy-status ok';
+    } else {
+      status.textContent = result.error || 'Test failed';
+      status.className = 'ntfy-status err';
+    }
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+    status.className = 'ntfy-status err';
+  }
+  setTimeout(() => { status.textContent = ''; status.className = 'ntfy-status'; }, 5000);
+}
 </script>
 </body>
 </html>

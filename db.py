@@ -180,3 +180,115 @@ def get_changes_json(limit: int = 100) -> list:
         {"timestamp": r[0], "flight_number": r[1], "destination": r[2], "time": r[3], "date": r[4], "old_seats": r[5], "new_seats": r[6], "change_type": r[7]}
         for r in rows
     ]
+
+
+# ── ntfy configurations (multiple rules) ──
+
+
+def _ensure_ntfy_table():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ntfy_configs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL DEFAULT 'Notification',
+            enabled INTEGER NOT NULL DEFAULT 0,
+            server_url TEXT NOT NULL DEFAULT 'https://ntfy.sh',
+            topic TEXT NOT NULL DEFAULT '',
+            mode TEXT NOT NULL DEFAULT 'all',
+            min_seats INTEGER NOT NULL DEFAULT 1,
+            destinations TEXT NOT NULL DEFAULT '[]'
+        )
+    """)
+    # Migrate from old single-row table if it exists
+    try:
+        row = conn.execute("SELECT enabled, server_url, topic, mode, min_seats, destinations FROM ntfy_config WHERE id=1").fetchone()
+        if row:
+            conn.execute(
+                "INSERT INTO ntfy_configs (name, enabled, server_url, topic, mode, min_seats, destinations) VALUES (?,?,?,?,?,?,?)",
+                ("Migrated", row[0], row[1], row[2], row[3], row[4], row[5]),
+            )
+            conn.execute("DROP TABLE ntfy_config")
+    except sqlite3.OperationalError:
+        pass
+    conn.commit()
+    conn.close()
+
+
+def _row_to_dict(row) -> dict:
+    return {
+        "id": row[0],
+        "name": row[1],
+        "enabled": bool(row[2]),
+        "server_url": row[3],
+        "topic": row[4],
+        "mode": row[5],
+        "min_seats": row[6],
+        "destinations": json.loads(row[7]),
+    }
+
+
+_NTFY_COLS = "id, name, enabled, server_url, topic, mode, min_seats, destinations"
+
+
+def get_all_ntfy_configs() -> list:
+    _ensure_ntfy_table()
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(f"SELECT {_NTFY_COLS} FROM ntfy_configs ORDER BY id").fetchall()
+    conn.close()
+    return [_row_to_dict(r) for r in rows]
+
+
+def get_ntfy_config(config_id: int) -> Optional[dict]:
+    _ensure_ntfy_table()
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(f"SELECT {_NTFY_COLS} FROM ntfy_configs WHERE id=?", (config_id,)).fetchone()
+    conn.close()
+    return _row_to_dict(row) if row else None
+
+
+def save_ntfy_config(cfg: dict) -> dict:
+    """Insert or update a notification config. Returns the saved config with id."""
+    _ensure_ntfy_table()
+    conn = sqlite3.connect(DB_PATH)
+    params = (
+        cfg.get("name", "Notification"),
+        int(cfg.get("enabled", False)),
+        cfg.get("server_url", "https://ntfy.sh").rstrip("/"),
+        cfg.get("topic", ""),
+        cfg.get("mode", "all"),
+        int(cfg.get("min_seats", 1)),
+        json.dumps(cfg.get("destinations", [])),
+    )
+    config_id = cfg.get("id")
+    if config_id:
+        conn.execute(
+            "UPDATE ntfy_configs SET name=?, enabled=?, server_url=?, topic=?, mode=?, min_seats=?, destinations=? WHERE id=?",
+            params + (config_id,),
+        )
+    else:
+        cur = conn.execute(
+            "INSERT INTO ntfy_configs (name, enabled, server_url, topic, mode, min_seats, destinations) VALUES (?,?,?,?,?,?,?)",
+            params,
+        )
+        config_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return get_ntfy_config(config_id)
+
+
+def delete_ntfy_config(config_id: int) -> bool:
+    _ensure_ntfy_table()
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM ntfy_configs WHERE id=?", (config_id,))
+    conn.commit()
+    affected = conn.total_changes
+    conn.close()
+    return affected > 0
+
+
+def get_all_destinations() -> list:
+    """Return sorted list of unique destination strings currently in the flights table."""
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("SELECT DISTINCT destination FROM flights ORDER BY destination").fetchall()
+    conn.close()
+    return [r[0] for r in rows]

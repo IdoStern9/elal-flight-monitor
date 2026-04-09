@@ -2,17 +2,36 @@ import asyncio
 import json
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
+import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, Response
+from pydantic import BaseModel
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from db import init_db, process_scrape, get_flights_json, get_changes_json, Change
+from db import (
+    init_db, process_scrape, get_flights_json, get_changes_json, Change,
+    get_all_ntfy_configs, get_ntfy_config, save_ntfy_config, delete_ntfy_config,
+    get_all_destinations,
+)
 from scraper import Scraper
+
+
+class NtfyConfigBody(BaseModel):
+    id: Optional[int] = None
+    name: str = "Notification"
+    enabled: bool = False
+    server_url: str = "https://ntfy.sh"
+    topic: str = ""
+    mode: str = "all"
+    min_seats: int = 1
+    destinations: List[str] = []
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,6 +42,7 @@ logger = logging.getLogger(__name__)
 scraper = Scraper()
 scheduler = AsyncIOScheduler()
 connected_clients: List[WebSocket] = []
+_http_client: httpx.AsyncClient | None = None
 
 scraper_status = {
     "last_scrape": None,
@@ -31,6 +51,79 @@ scraper_status = {
     "is_running": False,
     "available_dates": [],
 }
+
+
+def _extract_iata(dest: str) -> str:
+    m = re.search(r"\(([A-Z]{3})\)", dest)
+    return m.group(1) if m else ""
+
+
+def _dest_name_ascii(dest: str) -> str:
+    """Extract the destination name, stripping the IATA code parenthetical."""
+    return dest.replace(f"({_extract_iata(dest)})", "").replace(",", ",").strip()
+
+
+async def _send_for_config(cfg: dict, changes: List[Change]):
+    """Send one ntfy push per matching change."""
+    global _http_client
+    url = f"{cfg['server_url'].rstrip('/')}/{cfg['topic']}"
+
+    for c in changes:
+        if c.change_type not in ("new_flight", "seats_changed"):
+            continue
+        if c.new_seats is None or c.new_seats < cfg["min_seats"]:
+            continue
+        if c.change_type == "seats_changed" and c.old_seats is not None and c.old_seats >= cfg["min_seats"]:
+            continue
+        iata = _extract_iata(c.destination)
+        if cfg["mode"] == "selected" and iata not in cfg["destinations"]:
+            continue
+
+        seats = "9+" if c.new_seats >= 9 else str(c.new_seats)
+        dest_name = _dest_name_ascii(c.destination)
+
+        if c.change_type == "new_flight":
+            title = f"New flight: TLV -> {iata} ({seats} seats)"
+        else:
+            old = str(c.old_seats) if c.old_seats is not None else "0"
+            title = f"Seats available: TLV -> {iata} ({old} -> {seats})"
+
+        body_lines = [
+            f"Flight: {c.flight_number}",
+            f"Route: TLV -> {iata} {dest_name}",
+            f"Date: {c.date}",
+            f"Time: {c.time}",
+            f"Seats: {seats}",
+        ]
+        if c.change_type == "seats_changed":
+            body_lines.append(f"Was: {old}")
+
+        dd, mm = c.date.split(".")
+        book_url = f"https://www.elal.com/heb/book-a-flight?from=TLV&dest={iata}&dtfrom=2026-{mm}-{dd}&journey=one_way"
+
+        headers = {
+            "Title": title,
+            "Priority": "high",
+            "Tags": "airplane",
+        }
+        if iata:
+            headers["Click"] = book_url
+
+        try:
+            if _http_client is None:
+                _http_client = httpx.AsyncClient(timeout=10)
+            resp = await _http_client.post(url, content="\n".join(body_lines), headers=headers)
+            logger.info("ntfy [%s] %s %s %s -> [%d]", cfg["name"], c.flight_number, iata, c.date, resp.status_code)
+        except Exception:
+            logger.exception("ntfy [%s] send failed for %s", cfg["name"], c.flight_number)
+
+
+async def send_ntfy_alerts(changes: List[Change]):
+    """Iterate all enabled ntfy configs and send matching alerts."""
+    configs = get_all_ntfy_configs()
+    for cfg in configs:
+        if cfg["enabled"] and cfg["topic"]:
+            await _send_for_config(cfg, changes)
 
 
 async def broadcast(message: dict):
@@ -63,6 +156,9 @@ async def run_scrape():
 
         logger.info("Scrape complete: %d records, %d changes, dates: %s", len(result.records), len(changes), result.available_dates)
 
+        if changes:
+            await send_ntfy_alerts(changes)
+
         await broadcast({
             "type": "scrape_complete",
             "timestamp": now,
@@ -94,15 +190,19 @@ async def run_scrape():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _http_client
     os.chdir(Path(__file__).parent)
     init_db()
     await scraper.start()
+    _http_client = httpx.AsyncClient(timeout=10)
     scheduler.add_job(run_scrape, "interval", seconds=10, id="scraper", next_run_time=datetime.now())
     scheduler.start()
     logger.info("Flight alert system started -- dashboard at http://localhost:8080")
     yield
     scheduler.shutdown(wait=False)
     await scraper.stop()
+    if _http_client:
+        await _http_client.aclose()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -140,13 +240,55 @@ async def api_status():
     return scraper_status
 
 
+@app.get("/api/ntfy/configs")
+async def api_ntfy_list():
+    return get_all_ntfy_configs()
+
+
+@app.post("/api/ntfy/configs")
+async def api_ntfy_save(body: NtfyConfigBody):
+    saved = save_ntfy_config(body.model_dump())
+    return saved
+
+
+@app.delete("/api/ntfy/configs/{config_id}")
+async def api_ntfy_delete(config_id: int):
+    delete_ntfy_config(config_id)
+    return {"ok": True}
+
+
+@app.post("/api/ntfy/test/{config_id}")
+async def api_ntfy_test(config_id: int):
+    """Send a test notification for a specific config."""
+    cfg = get_ntfy_config(config_id)
+    if not cfg:
+        return {"ok": False, "error": "Config not found"}
+    if not cfg["topic"]:
+        return {"ok": False, "error": "No topic configured"}
+    url = f"{cfg['server_url'].rstrip('/')}/{cfg['topic']}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                url,
+                content=f"El Al Flight Monitor test - {cfg['name']}",
+                headers={"Title": "El Al Monitor - Test", "Tags": "white_check_mark,airplane"},
+            )
+        return {"ok": resp.status_code < 300, "status": resp.status_code}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/destinations")
+async def api_destinations():
+    return get_all_destinations()
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     connected_clients.append(ws)
     logger.info("WebSocket client connected (%d total)", len(connected_clients))
     try:
-        # Send current state immediately
         await ws.send_text(json.dumps({
             "type": "initial",
             "flights": get_flights_json(),
