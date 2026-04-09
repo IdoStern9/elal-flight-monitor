@@ -1,0 +1,985 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>El Al Flight Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --sidebar-w: 240px;
+  --header-h: 44px;
+  --datebar-h: 40px;
+  --font: 'DM Sans', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+[data-theme="dark"] {
+  --bg: #222d42;
+  --surface: #2e3e58;
+  --surface2: #3b5070;
+  --surface3: #4d6588;
+  --border: rgba(170,200,240,0.2);
+  --border-active: rgba(170,200,240,0.4);
+  --text: #f3f6fb;
+  --text-dim: #b4c5dc;
+  --text-faint: #8a9dba;
+  --accent: #70b0ff;
+  --accent-dim: rgba(112,176,255,0.18);
+  --green: #5ce898;
+  --green-bg: rgba(92,232,152,0.18);
+  --green-glow: rgba(92,232,152,0.35);
+  --red: #ff9b9b;
+  --red-bg: rgba(255,155,155,0.16);
+  --yellow: #fdd85d;
+  --yellow-bg: rgba(253,216,93,0.14);
+  --orange: #ffb86c;
+  --shadow: rgba(0,0,0,0.4);
+  --check-text: #fff;
+}
+
+[data-theme="light"] {
+  --bg: #f0f2f5;
+  --surface: #ffffff;
+  --surface2: #e8ecf2;
+  --surface3: #d5dce6;
+  --border: rgba(60,80,120,0.12);
+  --border-active: rgba(60,80,120,0.3);
+  --text: #1a2332;
+  --text-dim: #556278;
+  --text-faint: #8494a8;
+  --accent: #2b7fff;
+  --accent-dim: rgba(43,127,255,0.1);
+  --green: #16a34a;
+  --green-bg: rgba(22,163,74,0.1);
+  --green-glow: rgba(22,163,74,0.2);
+  --red: #dc2626;
+  --red-bg: rgba(220,38,38,0.08);
+  --yellow: #ca8a04;
+  --yellow-bg: rgba(202,138,4,0.08);
+  --orange: #ea580c;
+  --shadow: rgba(0,0,0,0.08);
+  --check-text: #fff;
+}
+
+html { font-size: var(--base-font, 15px); }
+body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; overflow: hidden; }
+
+/* ── Top bar ── */
+.topbar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  height: var(--header-h); background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 1rem;
+  backdrop-filter: blur(12px);
+}
+.topbar-brand { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
+.topbar-brand svg { width: 20px; height: 20px; color: var(--accent); }
+.topbar-title { font-size: 0.95rem; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap; }
+.topbar-controls { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
+.topbar-control { display: flex; align-items: center; gap: 0.35rem; font-size: 0.75rem; color: var(--text-dim); }
+.topbar-control label { white-space: nowrap; }
+.ctrl-input {
+  width: 42px; background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text); padding: 0.2rem 0.3rem; border-radius: 4px;
+  font-family: var(--mono); font-size: 0.75rem; text-align: center;
+}
+.ctrl-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+.ctrl-btn {
+  background: var(--surface2); border: 1px solid var(--border); color: var(--text-dim);
+  padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.72rem;
+  font-family: var(--font); cursor: pointer; transition: all 0.15s;
+}
+.ctrl-btn:hover { border-color: var(--accent); color: var(--text); background: var(--accent-dim); }
+.ctrl-btn.active { border-color: var(--green); color: var(--green); background: var(--green-bg); }
+.status-pill {
+  display: flex; align-items: center; gap: 0.3rem;
+  font-size: 0.7rem; font-family: var(--mono); color: var(--text-dim);
+  background: var(--surface2); padding: 0.2rem 0.5rem; border-radius: 20px;
+}
+.status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.status-dot.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.status-dot.err { background: var(--red); box-shadow: 0 0 6px var(--red); }
+.status-dot.wait { background: var(--yellow); animation: blink 1.5s infinite; }
+@keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* ── Sidebar ── */
+.sidebar {
+  position: fixed; top: var(--header-h); bottom: 0; right: 0;
+  width: var(--sidebar-w); background: var(--surface);
+  border-inline-start: 1px solid var(--border);
+  display: flex; flex-direction: column; z-index: 50;
+  transition: transform 0.25s ease;
+}
+.sidebar.collapsed { transform: translateX(calc(var(--sidebar-w) * -1)); }
+.sidebar-header {
+  padding: 0.55rem 0.75rem 0.45rem;
+  font-size: 0.68rem; font-weight: 600; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: 0.08em;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.sidebar-search {
+  margin: 0.4rem 0.6rem; padding: 0.3rem 0.55rem;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 5px; color: var(--text); font-size: 0.78rem;
+  font-family: var(--font); width: calc(100% - 1.2rem);
+}
+.sidebar-search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+.sidebar-search::placeholder { color: var(--text-faint); }
+
+.dest-list { flex: 1; overflow-y: auto; padding: 0.35rem 0; }
+.dest-list::-webkit-scrollbar { width: 4px; }
+.dest-list::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 2px; }
+
+.dest-item {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.3rem 0.75rem; cursor: pointer; transition: background 0.12s;
+  font-size: 0.78rem; position: relative;
+}
+.dest-item:hover { background: var(--surface2); }
+.dest-item.selected { background: var(--accent-dim); }
+.dest-item.selected .dest-item-code { color: var(--accent); }
+
+.dest-item-check {
+  width: 16px; height: 16px; border-radius: 4px;
+  border: 1.5px solid var(--text-faint); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; transition: all 0.12s;
+}
+.dest-item.selected .dest-item-check { border-color: var(--accent); background: var(--accent); }
+.dest-item.selected .dest-item-check::after { content: '✓'; color: var(--check-text); font-size: 0.6rem; font-weight: 700; }
+
+.dest-item-code { font-family: var(--mono); font-weight: 600; font-size: 0.82rem; min-width: 32px; }
+.dest-item-name { color: var(--text-dim); font-size: 0.78rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dest-item-badge {
+  font-family: var(--mono); font-size: 0.68rem; padding: 0.1rem 0.35rem;
+  border-radius: 4px; font-weight: 500;
+}
+.dest-item-badge.has-seats { background: var(--green-bg); color: var(--green); }
+.dest-item-badge.no-seats { background: var(--surface3); color: var(--text-faint); }
+
+.sidebar-footer {
+  padding: 0.65rem 1rem; border-top: 1px solid var(--border);
+  display: flex; gap: 0.5rem;
+}
+.sidebar-footer button {
+  flex: 1; padding: 0.4rem; border-radius: 5px; font-size: 0.75rem;
+  font-family: var(--font); cursor: pointer; border: 1px solid var(--border);
+  background: var(--surface2); color: var(--text-dim); transition: all 0.12s;
+}
+.sidebar-footer button:hover { border-color: var(--accent); color: var(--text); }
+
+/* ── Main content ── */
+.main {
+  margin-top: calc(var(--header-h) + var(--datebar-h));
+  margin-right: var(--sidebar-w);
+  height: calc(100vh - var(--header-h) - var(--datebar-h));
+  overflow-y: auto;
+  padding: 0.75rem 1rem 3rem;
+  transition: margin-right 0.25s ease;
+}
+.main.expanded { margin-right: 0; }
+.main::-webkit-scrollbar { width: 6px; }
+.main::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 3px; }
+
+/* ── Alert banner ── */
+.alert-banner {
+  display: none; margin-bottom: 1rem; padding: 1rem 1.25rem;
+  border-radius: 10px; border: 1px solid var(--green);
+  background: linear-gradient(135deg, var(--green-bg), var(--accent-dim));
+  animation: slideIn 0.35s ease-out; flex-direction: column; gap: 0.6rem;
+}
+.alert-banner.show { display: flex; }
+.alert-header { display: flex; align-items: center; gap: 0.6rem; }
+.alert-icon { font-size: 1.2rem; flex-shrink: 0; }
+.alert-header h3 { font-size: 0.9rem; font-weight: 700; }
+.alert-list { display: flex; flex-direction: column; gap: 0.4rem; }
+.alert-flight {
+  display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+  background: var(--surface2); border-radius: 7px; padding: 0.45rem 0.7rem;
+  font-size: 0.82rem; text-decoration: none; color: inherit; transition: background 0.15s, border-color 0.15s;
+  border: 1px solid transparent; cursor: pointer;
+}
+.alert-flight:hover { background: var(--green-bg); border-color: var(--green); }
+.alert-flight .af-dest { font-family: var(--mono); font-weight: 700; color: var(--accent); font-size: 0.84rem; }
+.alert-flight .af-fn { font-family: var(--mono); font-weight: 600; }
+.alert-flight .af-detail { color: var(--text-dim); font-size: 0.78rem; }
+.alert-flight .af-seats {
+  font-family: var(--mono); font-weight: 700; color: var(--green);
+  background: var(--green-bg); padding: 0.15rem 0.45rem; border-radius: 5px;
+  margin-inline-start: auto;
+}
+@keyframes slideIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ── Stats row ── */
+.stats-row { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
+.stat-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 0.5rem 0.75rem; min-width: 100px; flex: 1; max-width: 200px;
+}
+.stat-label { font-size: 0.65rem; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 500; margin-bottom: 0.15rem; }
+.stat-value { font-family: var(--mono); font-size: 1.15rem; font-weight: 700; }
+.stat-value.green { color: var(--green); }
+
+/* ── Destination groups ── */
+.dest-group { margin-bottom: 1rem; }
+.dest-group-header {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.45rem 0; margin-bottom: 0.4rem; cursor: pointer; user-select: none;
+}
+.dest-group-header:hover .dest-group-name { color: var(--text); }
+.dest-group-toggle { color: var(--text-faint); font-size: 0.65rem; transition: transform 0.2s; }
+.dest-group-toggle.open { transform: rotate(90deg); }
+.dest-group-code {
+  font-family: var(--mono); font-weight: 700; font-size: 0.82rem;
+  color: var(--accent); background: var(--accent-dim);
+  padding: 0.12rem 0.4rem; border-radius: 5px;
+}
+.dest-group-name { font-size: 0.78rem; color: var(--text-dim); transition: color 0.12s; }
+.dest-group-seats-tag {
+  margin-inline-start: auto; font-size: 0.7rem; font-family: var(--mono);
+  padding: 0.15rem 0.45rem; border-radius: 4px; font-weight: 500;
+}
+.dest-group-seats-tag.available { background: var(--green-bg); color: var(--green); }
+.dest-group-seats-tag.none { background: var(--surface2); color: var(--text-faint); }
+
+.dest-table {
+  width: 100%; border-collapse: separate; border-spacing: 0;
+  margin-bottom: 0.25rem; table-layout: fixed;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  overflow: hidden;
+}
+.dest-table thead th {
+  font-size: 0.7rem; color: var(--text-faint); font-weight: 600; font-family: var(--mono);
+  padding: 0.4rem 0.3rem; text-align: center;
+  background: var(--surface2); border-bottom: 1px solid var(--border);
+  border-inline-start: 1px solid var(--border);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  line-height: 1.3;
+}
+.dest-table thead th:first-child { text-align: right; width: 72px; border-inline-start: none; }
+.dest-table thead th:nth-child(2) { text-align: right; width: 56px; }
+.dest-table tbody tr { transition: background 0.1s; }
+.dest-table tbody tr:hover { background: var(--accent-dim); }
+.dest-table tbody td {
+  padding: 0.35rem 0.3rem; border-bottom: 1px solid var(--border);
+  border-inline-start: 1px solid var(--border); text-align: center;
+}
+.dest-table tbody td:first-child { border-inline-start: none; text-align: right; }
+.dest-table tbody td:nth-child(2) { text-align: right; }
+.dest-table tbody tr:last-child td { border-bottom: none; }
+.seat-empty { color: var(--text-faint); opacity: 0.25; font-size: 0.7rem; font-family: var(--mono); }
+.flight-num { font-family: var(--mono); font-weight: 700; font-size: 0.82rem; white-space: nowrap; }
+.flight-time { font-family: var(--mono); font-size: 0.78rem; color: var(--text-dim); white-space: nowrap; }
+.seat-pill {
+  display: block; padding: 0.25rem 0.35rem; border-radius: 5px;
+  font-family: var(--mono); font-weight: 600; font-size: 0.82rem;
+  text-align: center; text-decoration: none; transition: all 0.15s;
+  min-width: 38px; margin: 0 auto;
+}
+.seat-pill.available { background: var(--green-bg); color: var(--green); border: 1px solid transparent; }
+a.seat-pill.available { cursor: pointer; }
+a.seat-pill.available:hover { background: var(--green-glow); border-color: var(--green); box-shadow: 0 0 12px var(--green-bg); transform: translateY(-1px); }
+.seat-pill.below-min { background: var(--yellow-bg); color: var(--yellow); opacity: 0.7; border: 1px solid transparent; }
+.seat-pill.zero { background: var(--red-bg); color: var(--red); opacity: 0.55; border: 1px solid transparent; }
+.seat-pill.changed { animation: glow 2.5s ease-out; }
+@keyframes glow {
+  0% { box-shadow: 0 0 15px var(--accent), inset 0 0 8px rgba(79,143,247,0.3); border-color: var(--accent); }
+  100% { box-shadow: none; border-color: transparent; }
+}
+
+/* ── Change log drawer ── */
+.changelog-toggle {
+  position: fixed; bottom: 1rem; left: 1rem; z-index: 90;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 0.5rem 0.85rem; cursor: pointer; font-family: var(--font);
+  font-size: 0.8rem; color: var(--text-dim); display: flex; align-items: center; gap: 0.45rem;
+  transition: all 0.15s; box-shadow: 0 4px 20px var(--shadow);
+}
+.changelog-toggle:hover { border-color: var(--accent); color: var(--text); }
+.changelog-toggle .cl-count {
+  background: var(--accent); color: #fff; font-size: 0.65rem;
+  padding: 0.1rem 0.35rem; border-radius: 8px; font-weight: 600; font-family: var(--mono);
+}
+
+.changelog-drawer {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 95;
+  background: var(--surface); border-top: 1px solid var(--border);
+  max-height: 45vh; transform: translateY(100%); transition: transform 0.3s ease;
+  display: flex; flex-direction: column;
+  box-shadow: 0 -8px 40px var(--shadow);
+}
+.changelog-drawer.open { transform: translateY(0); }
+.changelog-drawer-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.changelog-drawer-header h3 { font-size: 0.88rem; font-weight: 600; }
+.changelog-close {
+  background: none; border: none; color: var(--text-dim); cursor: pointer;
+  font-size: 1.1rem; padding: 0.2rem 0.4rem; border-radius: 4px;
+}
+.changelog-close:hover { background: var(--surface2); color: var(--text); }
+.changelog-body { overflow-y: auto; padding: 0.5rem 1.25rem; flex: 1; }
+.changelog-body::-webkit-scrollbar { width: 4px; }
+.changelog-body::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 2px; }
+.cl-item { padding: 0.65rem 0; border-bottom: 1px solid var(--border); font-size: 0.8rem; }
+.cl-item:last-child { border-bottom: none; }
+.cl-row1 { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.3rem; }
+.cl-time { font-size: 0.65rem; color: var(--text-faint); font-family: var(--mono); direction: ltr; }
+.cl-badge { padding: 0.1rem 0.45rem; border-radius: 4px; font-size: 0.65rem; font-weight: 600; font-family: var(--mono); white-space: nowrap; }
+.cl-badge.new { background: var(--green-bg); color: var(--green); }
+.cl-badge.changed { background: var(--accent-dim); color: var(--accent); }
+.cl-badge.removed { background: var(--red-bg); color: var(--red); }
+.cl-row2 { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.cl-flight { font-family: var(--mono); font-weight: 700; font-size: 0.88rem; }
+.cl-dest-code { font-family: var(--mono); font-weight: 600; font-size: 0.78rem; color: var(--accent); background: var(--accent-dim); padding: 0.08rem 0.4rem; border-radius: 4px; }
+.cl-dest-name { font-size: 0.75rem; color: var(--text-dim); }
+.cl-row3 { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.25rem; font-size: 0.78rem; color: var(--text-dim); }
+.cl-detail { display: flex; align-items: center; gap: 0.25rem; }
+.cl-detail-label { font-size: 0.68rem; color: var(--text-faint); }
+.cl-seats-val { font-family: var(--mono); font-weight: 600; }
+.cl-seats-val.pos { color: var(--green); }
+.cl-seats-val.zero { color: var(--red); }
+.cl-seats-val.na { color: var(--text-faint); }
+.cl-arrow { color: var(--text-faint); font-size: 0.75rem; }
+
+.empty-state { text-align: center; padding: 3rem 1rem; color: var(--text-faint); font-size: 0.88rem; }
+.empty-state .empty-icon { font-size: 2rem; margin-bottom: 0.5rem; opacity: 0.4; }
+
+/* ── Date bar ── */
+.date-bar {
+  position: fixed; top: var(--header-h); left: 0; right: var(--sidebar-w); z-index: 40;
+  height: var(--datebar-h); background: var(--surface); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 0.35rem; padding: 0 1rem;
+  overflow-x: auto; transition: right 0.25s ease;
+}
+.date-bar::-webkit-scrollbar { height: 3px; }
+.date-bar::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 2px; }
+.date-bar-label { font-size: 0.78rem; color: var(--text-faint); font-weight: 600; margin-inline-end: 0.3rem; white-space: nowrap; }
+.date-btn {
+  background: var(--surface2); border: 1px solid var(--border); color: var(--text-dim);
+  padding: 0.2rem 0.5rem; border-radius: 6px; font-size: 0.78rem;
+  font-family: var(--mono); cursor: pointer; transition: all 0.12s; white-space: nowrap;
+  display: inline-flex; align-items: baseline; gap: 0.25rem;
+  flex-shrink: 0; line-height: 1;
+}
+.date-btn:hover { border-color: var(--accent); color: var(--text); }
+.date-btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.date-btn .day-name { font-size: 0.68rem; color: var(--text-faint); font-weight: 400; }
+.date-btn.active .day-name { color: var(--accent); }
+.date-btn.no-data { opacity: 0.4; }
+.date-btn.no-data.active { opacity: 0.6; }
+
+@media (max-width: 800px) {
+  .sidebar { width: 100%; transform: translateX(100%); }
+  .sidebar.visible { transform: translateX(0); }
+  .main { margin-right: 0; }
+  :root { --sidebar-w: 0px; }
+  .dest-table { font-size: 0.8rem; }
+}
+</style>
+</head>
+<body>
+
+<!-- ─── Top bar ─── -->
+<div class="topbar">
+  <div class="topbar-brand">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.8 19.2L16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/></svg>
+    <span class="topbar-title">El Al Flight Monitor</span>
+  </div>
+  <div class="topbar-controls">
+    <div class="topbar-control">
+      <label>Min seats</label>
+      <input class="ctrl-input" id="minSeatsInput" type="number" min="1" max="9" value="1">
+    </div>
+    <div class="topbar-control">
+      <label>Font size</label>
+      <input class="ctrl-input" id="fontSizeInput" type="number" min="10" max="22" value="15">
+    </div>
+    <button class="ctrl-btn active" id="soundBtn" onclick="toggleSound()">🔊 Sound</button>
+    <button class="ctrl-btn" id="themeBtn" onclick="toggleTheme()">☀ Light</button>
+    <div class="status-pill">
+      <span class="status-dot wait" id="statusDot"></span>
+      <span id="statusText">Connecting…</span>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Date bar ─── -->
+<div class="date-bar" id="dateBar">
+  <span class="date-bar-label">Dates:</span>
+</div>
+
+<!-- ─── Sidebar: Destinations ─── -->
+<div class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <span>Destinations</span>
+    <span id="destCount" style="font-family:var(--mono);font-weight:400"></span>
+  </div>
+  <input class="sidebar-search" id="destSearch" type="text" placeholder="Search…">
+  <div class="dest-list" id="destList"></div>
+  <div class="sidebar-footer">
+    <button onclick="selectAll()">Select All</button>
+    <button onclick="clearFilter()">Clear</button>
+    <button onclick="selectWithSeats()">With Seats</button>
+  </div>
+</div>
+
+<!-- ─── Main ─── -->
+<div class="main" id="mainContent">
+  <div id="alertBanner" class="alert-banner">
+    <div class="alert-header"><div class="alert-icon">✈</div><h3 id="alertTitle"></h3></div>
+    <div class="alert-list" id="alertList"></div>
+  </div>
+
+  <div class="stats-row" id="statsRow">
+    <div class="stat-card"><div class="stat-label">Destinations</div><div class="stat-value" id="statDests">—</div></div>
+    <div class="stat-card"><div class="stat-label">Flights</div><div class="stat-value" id="statFlights">—</div></div>
+    <div class="stat-card"><div class="stat-label">Available</div><div class="stat-value green" id="statAvailable">—</div></div>
+    <div class="stat-card"><div class="stat-label">Last Scrape</div><div class="stat-value" id="statTime" style="font-size:1rem">—</div></div>
+  </div>
+
+  <div id="flightContent">
+    <div class="empty-state"><div class="empty-icon">✈</div>Waiting for first scrape…</div>
+  </div>
+</div>
+
+<!-- ─── Change log toggle + drawer ─── -->
+<button class="changelog-toggle" id="clToggle" onclick="toggleChangelog()">
+  Change Log <span class="cl-count" id="clCount">0</span>
+</button>
+<div class="changelog-drawer" id="clDrawer">
+  <div class="changelog-drawer-header">
+    <h3>Change Log</h3>
+    <button class="changelog-close" onclick="toggleChangelog()">✕</button>
+  </div>
+  <div class="changelog-body" id="clBody">
+    <div class="empty-state">No changes yet</div>
+  </div>
+</div>
+
+<script>
+// ── Theme ──
+const savedTheme = localStorage.getItem('theme') || 'dark';
+document.documentElement.setAttribute('data-theme', savedTheme);
+
+// ── Font size ──
+let baseFontSize = parseInt(localStorage.getItem('fontSize') || '15', 10);
+const fontInput = document.getElementById('fontSizeInput');
+fontInput.value = baseFontSize;
+applyFontSize(baseFontSize);
+
+function applyFontSize(px) {
+  document.documentElement.style.setProperty('--base-font', px + 'px');
+}
+fontInput.addEventListener('change', () => {
+  baseFontSize = Math.max(10, Math.min(22, parseInt(fontInput.value, 10) || 15));
+  fontInput.value = baseFontSize;
+  applyFontSize(baseFontSize);
+  localStorage.setItem('fontSize', baseFontSize);
+});
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme');
+  const next = current === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('theme', next);
+  updateThemeBtn(next);
+}
+function updateThemeBtn(theme) {
+  const btn = document.getElementById('themeBtn');
+  btn.textContent = theme === 'dark' ? '☀ Light' : '🌙 Dark';
+}
+updateThemeBtn(savedTheme);
+
+let ws = null;
+let soundEnabled = true;
+let flights = [];
+let changedKeys = new Set();
+let allChanges = [];
+let reconnectDelay = 1000;
+let selectedDests = new Set();
+let destSearchText = '';
+let minSeats = 1;
+let clOpen = false;
+let collapsedGroups = new Set();
+let scrapedDates = new Set();
+let selectedDates = new Set();
+
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+
+function generateWeekDates() {
+  const dates = [];
+  const today = new Date();
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() + i);
+    dates.push(`${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}`);
+  }
+  return dates;
+}
+
+function dateToDayName(ddmm) {
+  const [dd, mm] = ddmm.split('.');
+  const d = new Date(2026, parseInt(mm) - 1, parseInt(dd));
+  return DAY_NAMES[d.getDay()];
+}
+
+function dateToFull(ddmm) {
+  const [dd, mm] = ddmm.split('.');
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${parseInt(dd)} ${months[parseInt(mm) - 1]}`;
+}
+
+const weekDates = generateWeekDates();
+
+function getActiveDates() {
+  if (selectedDates.size === 0) return weekDates;
+  return weekDates.filter(d => selectedDates.has(d));
+}
+
+function renderDateBar() {
+  const bar = document.getElementById('dateBar');
+  let html = '<span class="date-bar-label">TLV&nbsp;→</span>';
+  weekDates.forEach(d => {
+    const isSelected = selectedDates.has(d) || selectedDates.size === 0;
+    const hasData = scrapedDates.has(d);
+    let cls = 'date-btn';
+    if (isSelected) cls += ' active';
+    if (!hasData) cls += ' no-data';
+    const dayName = dateToDayName(d);
+    const full = dateToFull(d);
+    html += `<button class="${cls}" onclick="toggleDate('${d}')"><span class="day-name">${dayName}</span><span>${full}</span></button>`;
+  });
+  bar.innerHTML = html;
+}
+
+function toggleDate(d) {
+  if (selectedDates.has(d)) {
+    selectedDates.delete(d);
+  } else {
+    selectedDates.add(d);
+  }
+  localStorage.setItem('selectedDates', JSON.stringify([...selectedDates]));
+  renderDateBar();
+  render();
+}
+
+// Restore saved date selection (only keep dates still in the week window)
+try {
+  const saved = JSON.parse(localStorage.getItem('selectedDates') || '[]');
+  const weekSet = new Set(weekDates);
+  saved.filter(d => weekSet.has(d)).forEach(d => selectedDates.add(d));
+} catch (e) {}
+
+// ── Helpers ──
+function extractCode(dest) {
+  const m = dest.match(/\(([A-Z]{3})\)/);
+  return m ? m[1] : dest.substring(0, 3);
+}
+function extractName(dest) {
+  return dest.replace(/\([A-Z]{3}\)/, '').replace(/,/g, ',').trim();
+}
+function formatTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleTimeString('he-IL', {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+}
+
+// ── Sound ──
+function toggleSound() {
+  soundEnabled = !soundEnabled;
+  const btn = document.getElementById('soundBtn');
+  btn.textContent = soundEnabled ? '🔊 Sound' : '🔇 Muted';
+  btn.classList.toggle('active', soundEnabled);
+}
+function playAlert() {
+  if (!soundEnabled) return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.15, 0.3].forEach((delay, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.frequency.value = [880, 1100, 1320][i];
+      osc.type = 'sine';
+      gain.gain.setValueAtTime(0.12, ctx.currentTime + delay);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + 0.3);
+      osc.start(ctx.currentTime + delay);
+      osc.stop(ctx.currentTime + delay + 0.3);
+    });
+  } catch (e) {}
+}
+function sendNotification(title, body) {
+  if (Notification.permission === 'granted') new Notification(title, {body});
+  else if (Notification.permission !== 'denied') Notification.requestPermission();
+}
+
+// ── Min seats ──
+document.getElementById('minSeatsInput').addEventListener('input', () => {
+  const v = parseInt(document.getElementById('minSeatsInput').value);
+  minSeats = (v && v >= 1) ? v : 1;
+  render();
+});
+
+// ── Destinations ──
+function getDestMap() {
+  const dates = getActiveDates();
+  const dateSet = new Set(dates);
+  const map = {};
+  flights.forEach(f => {
+    if (!dateSet.has(f.date)) return;
+    const code = extractCode(f.destination);
+    if (!map[code]) map[code] = { code, fullName: f.destination, name: extractName(f.destination), flights: new Set(), maxSeats: 0 };
+    map[code].flights.add(f.flight_number);
+    if (f.seats !== null && f.seats > 0) map[code].maxSeats = Math.max(map[code].maxSeats, f.seats);
+  });
+  return map;
+}
+
+function renderSidebar() {
+  const map = getDestMap();
+  const dests = Object.values(map).sort((a, b) => a.code.localeCompare(b.code));
+  const q = destSearchText.toLowerCase();
+  const filtered = q ? dests.filter(d => d.code.toLowerCase().includes(q) || d.name.toLowerCase().includes(q)) : dests;
+
+  document.getElementById('destCount').textContent = `${filtered.length}`;
+
+  const html = filtered.map(d => {
+    const sel = selectedDests.size === 0 || selectedDests.has(d.code) ? ' selected' : '';
+    const hasSeatsCls = d.maxSeats >= minSeats ? 'has-seats' : 'no-seats';
+    const seatLabel = d.maxSeats >= minSeats ? `${d.maxSeats >= 9 ? '9+' : d.maxSeats}` : '—';
+    return `<div class="dest-item${sel}" onclick="toggleDest('${d.code}')">
+      <div class="dest-item-check"></div>
+      <span class="dest-item-code">${d.code}</span>
+      <span class="dest-item-name">${d.name}</span>
+      <span class="dest-item-badge ${hasSeatsCls}">${seatLabel}</span>
+    </div>`;
+  }).join('');
+  document.getElementById('destList').innerHTML = html || '<div class="empty-state" style="padding:1.5rem">No match</div>';
+}
+
+document.getElementById('destSearch').addEventListener('input', (e) => {
+  destSearchText = e.target.value.trim();
+  renderSidebar();
+});
+
+function toggleDest(code) {
+  if (selectedDests.has(code)) selectedDests.delete(code);
+  else selectedDests.add(code);
+  render();
+}
+function clearFilter() { selectedDests.clear(); render(); }
+function selectAll() {
+  const map = getDestMap();
+  Object.keys(map).forEach(c => selectedDests.add(c));
+  render();
+}
+function selectWithSeats() {
+  selectedDests.clear();
+  const map = getDestMap();
+  Object.values(map).forEach(d => { if (d.maxSeats >= minSeats) selectedDests.add(d.code); });
+  render();
+}
+
+// ── Render ──
+function render() {
+  renderDateBar();
+  renderSidebar();
+  renderFlights();
+}
+
+function renderFlights() {
+  const container = document.getElementById('flightContent');
+
+  if (flights.length === 0) {
+    container.innerHTML = '<div class="empty-state"><div class="empty-icon">✈</div>Waiting for first scrape…</div>';
+    return;
+  }
+
+  const DATES = getActiveDates();
+  const dateSet = new Set(DATES);
+
+  const visible = flights.filter(f => {
+    if (!dateSet.has(f.date)) return false;
+    const code = extractCode(f.destination);
+    return selectedDests.size === 0 || selectedDests.has(code);
+  });
+
+  // Group by destination
+  const groups = {};
+  visible.forEach(f => {
+    const code = extractCode(f.destination);
+    if (!groups[code]) groups[code] = { code, name: extractName(f.destination), flights: {} };
+    const key = `${f.flight_number}_${f.time}`;
+    if (!groups[code].flights[key]) groups[code].flights[key] = { flight_number: f.flight_number, time: f.time, dates: {}, urls: {} };
+    groups[code].flights[key].dates[f.date] = f.seats;
+    if (f.book_url) groups[code].flights[key].urls[f.date] = f.book_url;
+  });
+
+  // Filter: keep only flights that exist on at least one selected date
+  Object.values(groups).forEach(g => {
+    for (const key of Object.keys(g.flights)) {
+      const fl = g.flights[key];
+      const hasAnyDate = DATES.some(d => fl.dates[d] !== null && fl.dates[d] !== undefined);
+      if (!hasAnyDate) delete g.flights[key];
+    }
+  });
+
+  const sortedGroups = Object.values(groups)
+    .filter(g => Object.keys(g.flights).length > 0)
+    .sort((a, b) => a.code.localeCompare(b.code));
+
+  // Stats
+  let totalFlightRows = 0;
+  let totalAvailable = 0;
+  sortedGroups.forEach(g => {
+    const fArr = Object.values(g.flights);
+    totalFlightRows += fArr.length;
+    fArr.forEach(fl => DATES.forEach(d => { if (fl.dates[d] !== null && fl.dates[d] !== undefined && fl.dates[d] >= minSeats) totalAvailable++; }));
+  });
+  document.getElementById('statDests').textContent = sortedGroups.length;
+  document.getElementById('statFlights').textContent = totalFlightRows;
+  document.getElementById('statAvailable').textContent = totalAvailable;
+
+  if (sortedGroups.length === 0) {
+    container.innerHTML = '<div class="empty-state"><div class="empty-icon">🔍</div>No flights match filter</div>';
+    return;
+  }
+
+  let html = '';
+  sortedGroups.forEach(g => {
+    const fArr = Object.values(g.flights).sort((a, b) => a.time.localeCompare(b.time));
+    const groupMaxSeats = Math.max(0, ...fArr.flatMap(fl => DATES.map(d => fl.dates[d] ?? 0)));
+    const hasSeats = groupMaxSeats >= minSeats;
+    const collapsed = collapsedGroups.has(g.code);
+
+    html += `<div class="dest-group">`;
+    html += `<div class="dest-group-header" onclick="toggleGroup('${g.code}')">`;
+    html += `<span class="dest-group-toggle ${collapsed ? '' : 'open'}">▶</span>`;
+    html += `<span class="dest-group-code">${g.code}</span>`;
+    html += `<span class="dest-group-name">${g.name}</span>`;
+    html += `<span class="dest-group-seats-tag ${hasSeats ? 'available' : 'none'}">${hasSeats ? (groupMaxSeats >= 9 ? '9+ seats' : groupMaxSeats + ' seats') : 'no seats'}</span>`;
+    html += `</div>`;
+
+    if (!collapsed) {
+      html += `<table class="dest-table"><thead><tr>`;
+      html += `<th>Flight</th><th>Time</th>`;
+      DATES.forEach(d => html += `<th>${dateToDayName(d)}<br>${dateToFull(d)}</th>`);
+      html += `</tr></thead><tbody>`;
+      fArr.forEach(fl => {
+        html += `<tr><td><span class="flight-num">${fl.flight_number}</span></td>`;
+        html += `<td><span class="flight-time">${fl.time}</span></td>`;
+        DATES.forEach(d => {
+          const seats = fl.dates[d];
+          const url = fl.urls[d];
+          const cellKey = `${fl.flight_number}_${fl.time}_${d}`;
+          const isChanged = changedKeys.has(cellKey);
+          const chCls = isChanged ? ' changed' : '';
+          const label = (seats !== null && seats !== undefined) ? (seats >= 9 ? '9+' : seats) : '';
+
+          html += `<td>`;
+          if (seats === null || seats === undefined) {
+            html += `<span class="seat-empty">—</span>`;
+          } else if (seats === 0) {
+            html += `<div class="seat-pill zero${chCls}">0</div>`;
+          } else if (seats < minSeats) {
+            html += `<div class="seat-pill below-min${chCls}">${label}</div>`;
+          } else if (url) {
+            html += `<a href="${url}" target="_blank" rel="noopener" class="seat-pill available${chCls}">${label}</a>`;
+          } else {
+            html += `<div class="seat-pill available${chCls}">${label}</div>`;
+          }
+          html += `</td>`;
+        });
+        html += `</tr>`;
+      });
+      html += `</tbody></table>`;
+    }
+    html += `</div>`;
+  });
+
+  container.innerHTML = html;
+}
+
+function toggleGroup(code) {
+  if (collapsedGroups.has(code)) collapsedGroups.delete(code);
+  else collapsedGroups.add(code);
+  renderFlights();
+}
+
+// ── Change log ──
+function toggleChangelog() {
+  clOpen = !clOpen;
+  document.getElementById('clDrawer').classList.toggle('open', clOpen);
+}
+
+function seatsCls(n) {
+  if (n === null || n === undefined) return 'na';
+  return n > 0 ? 'pos' : 'zero';
+}
+function seatsLabel(n) {
+  if (n === null || n === undefined) return '—';
+  return n >= 9 ? '9+' : String(n);
+}
+
+function renderChanges(data) {
+  document.getElementById('clCount').textContent = data.length;
+  const body = document.getElementById('clBody');
+  if (!data.length) { body.innerHTML = '<div class="empty-state">No changes yet</div>'; return; }
+
+  body.innerHTML = data.map(c => {
+    const dest = c.destination || '';
+    const code = extractCode(dest);
+    const name = dest ? extractName(dest) : '';
+    let badge = '';
+    if (c.change_type === 'new_flight') badge = '<span class="cl-badge new">NEW</span>';
+    else if (c.change_type === 'seats_changed') badge = '<span class="cl-badge changed">SEATS</span>';
+    else badge = '<span class="cl-badge removed">GONE</span>';
+
+    let seatsHtml = '';
+    if (c.change_type === 'seats_changed') {
+      seatsHtml = `<span class="cl-detail"><span class="cl-detail-label">Seats:</span> <span class="cl-seats-val ${seatsCls(c.old_seats)}">${seatsLabel(c.old_seats)}</span> <span class="cl-arrow">→</span> <span class="cl-seats-val ${seatsCls(c.new_seats)}">${seatsLabel(c.new_seats)}</span></span>`;
+    } else if (c.change_type === 'new_flight') {
+      seatsHtml = `<span class="cl-detail"><span class="cl-detail-label">Seats:</span> <span class="cl-seats-val ${seatsCls(c.new_seats)}">${seatsLabel(c.new_seats)}</span></span>`;
+    } else {
+      seatsHtml = `<span class="cl-detail"><span class="cl-detail-label">Was:</span> <span class="cl-seats-val ${seatsCls(c.old_seats)}">${seatsLabel(c.old_seats)}</span></span>`;
+    }
+
+    return `<div class="cl-item">
+      <div class="cl-row1"><span class="cl-time">${formatTime(c.timestamp)}</span>${badge}</div>
+      <div class="cl-row2"><span class="cl-flight">${c.flight_number}</span>${code ? `<span class="cl-dest-code">${code}</span>` : ''}${name ? `<span class="cl-dest-name">${name}</span>` : ''}</div>
+      <div class="cl-row3"><span class="cl-detail"><span class="cl-detail-label">Date:</span> ${c.date}</span><span class="cl-detail"><span class="cl-detail-label">Time:</span> ${c.time}</span>${seatsHtml}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── Alert ──
+function showAlert(changes) {
+  const activeDateSet = new Set(getActiveDates());
+  const important = changes.filter(c =>
+    activeDateSet.has(c.date) && (
+      (c.change_type === 'new_flight' && c.new_seats !== null && c.new_seats >= minSeats) ||
+      (c.change_type === 'seats_changed' && c.new_seats !== null && c.new_seats >= minSeats && (c.old_seats === null || c.old_seats < minSeats))
+    )
+  );
+  if (!important.length) return;
+
+  playAlert();
+
+  const banner = document.getElementById('alertBanner');
+  document.getElementById('alertTitle').textContent = `${important.length} flight${important.length > 1 ? 's' : ''} now available!`;
+
+  const listHtml = important.map(c => {
+    const dest = c.destination || '';
+    const code = extractCode(dest);
+    const name = extractName(dest);
+    const seatsLabel = c.new_seats >= 9 ? '9+' : c.new_seats;
+    const prevInfo = (c.change_type === 'seats_changed' && c.old_seats !== null)
+      ? ` (was ${c.old_seats})` : '';
+
+    const match = flights.find(f => f.flight_number === c.flight_number && f.time === c.time && f.date === c.date);
+    let url = match?.book_url;
+    if (!url && code) {
+      const dd = c.date.split('.')[0];
+      const mm = c.date.split('.')[1];
+      url = `https://www.elal.com/heb/book-a-flight?from=TLV&dest=${code}&dtfrom=2026-${mm}-${dd}&journey=one_way`;
+    }
+
+    const tag = url ? 'a' : 'div';
+    const linkAttrs = url ? ` href="${url}" target="_blank" rel="noopener"` : '';
+    return `<${tag} class="alert-flight"${linkAttrs}>
+      <span class="af-dest">${code}</span>
+      <span class="af-fn">${c.flight_number}</span>
+      <span class="af-detail">${name} · ${c.time} · ${c.date}${prevInfo}</span>
+      <span class="af-seats">${seatsLabel} seats</span>
+    </${tag}>`;
+  }).join('');
+  document.getElementById('alertList').innerHTML = listHtml;
+
+  banner.classList.add('show');
+  setTimeout(() => banner.classList.remove('show'), 20000);
+
+  const notifLines = important.map(c => {
+    const code = extractCode(c.destination || '');
+    const name = extractName(c.destination || '');
+    return `${code} ${c.flight_number} · ${name} · ${c.time} · ${c.date} → ${c.new_seats >= 9 ? '9+' : c.new_seats} seats`;
+  });
+  sendNotification(
+    `El Al — ${important.length} flight${important.length > 1 ? 's' : ''} available!`,
+    notifLines.join('\n')
+  );
+}
+
+// ── Status ──
+function updateStatus(ok, text) {
+  const dot = document.getElementById('statusDot');
+  dot.className = 'status-dot ' + (ok === true ? 'ok' : ok === false ? 'err' : 'wait');
+  document.getElementById('statusText').textContent = text;
+  if (text.includes('Last scrape')) {
+    document.getElementById('statTime').textContent = text.replace('Last scrape: ', '');
+  }
+}
+
+// ── WebSocket ──
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.onopen = () => { reconnectDelay = 1000; updateStatus(true, 'Connected'); };
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === 'initial') {
+      flights = msg.flights || [];
+      if (msg.status?.available_dates?.length) {
+        scrapedDates = new Set(msg.status.available_dates);
+      }
+      render();
+      allChanges = msg.changes || [];
+      renderChanges(allChanges);
+      if (msg.status?.last_success) updateStatus(true, `Last scrape: ${formatTime(msg.status.last_success)}`);
+    }
+
+    if (msg.type === 'scrape_complete') {
+      changedKeys = new Set();
+      (msg.changes || []).forEach(c => changedKeys.add(`${c.flight_number}_${c.time}_${c.date}`));
+      flights = msg.flights || [];
+      if (msg.available_dates?.length) {
+        scrapedDates = new Set(msg.available_dates);
+      }
+      render();
+      if (msg.changes?.length > 0) {
+        allChanges = [...msg.changes, ...allChanges].slice(0, 200);
+        renderChanges(allChanges);
+        showAlert(msg.changes);
+      }
+      updateStatus(true, `Last scrape: ${formatTime(msg.timestamp)} (${msg.record_count} records)`);
+    }
+
+    if (msg.type === 'scrape_error') {
+      updateStatus(false, `Error: ${msg.error?.substring(0, 50)}`);
+    }
+  };
+
+  ws.onclose = () => {
+    updateStatus(null, `Reconnecting…`);
+    setTimeout(() => { reconnectDelay = Math.min(reconnectDelay * 2, 30000); connect(); }, reconnectDelay);
+  };
+  ws.onerror = () => ws.close();
+}
+
+if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+connect();
+</script>
+</body>
+</html>
